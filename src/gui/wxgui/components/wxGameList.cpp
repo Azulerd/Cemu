@@ -1,4 +1,5 @@
 #include "wxgui/components/wxGameList.h"
+#include <wx/stopwatch.h>
 
 #include "wxgui/helpers/wxCustomData.h"
 #include "wxCemuConfig.h"
@@ -28,6 +29,7 @@
 #include "config/LaunchSettings.h"
 #include "Cafe/TitleList/GameInfo.h"
 #include "Cafe/TitleList/TitleList.h"
+#include "Cafe/GraphicPack/GraphicPack2.h"
 
 #include "wxgui/CemuApp.h"
 #include "wxgui/helpers/wxHelpers.h"
@@ -212,20 +214,23 @@ wxGameList::~wxGameList()
 	m_tooltip_timer->Stop();
 
 	// shut down async worker
+	wxStopWatch closeWatch;
 	m_async_worker_active.store(false);
 	m_async_task_count.increment();
 	m_async_worker_thread.join();
+	cemuLog_log(LogType::Force, "[Cierre] hilo de iconos: {} ms", closeWatch.Time());
 
 	// clear image cache
 	m_icon_cache_mtx.lock();
 	m_icon_cache.clear();
+	m_art_cache.clear();
 	m_icon_cache_mtx.unlock();
 }
 
 void wxGameList::LoadConfig()
 {
 	const auto& config = GetWxGUIConfig();
-	SetStyle((Style)config.game_list_style, false);
+	SetStyle((Style)std::clamp(config.game_list_style, 0, (int)Style::kTiles), false);
 
 	if (!config.game_list_column_order.empty())
 	{
@@ -406,6 +411,7 @@ void wxGameList::SetStyle(Style style, bool save)
 	switch(style)
 	{
 	case Style::kIcons:
+	case Style::kTiles:
 		wxListCtrl::SetImageList(&m_image_list_data, wxIMAGE_LIST_NORMAL);
 		break;
 	case Style::kSmallIcons:
@@ -428,6 +434,8 @@ void wxGameList::SetStyle(Style style, bool save)
 
 	if (style == Style::kList)
 		ApplyGameListColumnWidths();
+
+	UpdateViewVisibility();
 }
 
 long wxGameList::GetStyleFlags(Style style) const
@@ -437,6 +445,7 @@ long wxGameList::GetStyleFlags(Style style) const
 	case Style::kList:
 		return (wxLC_SINGLE_SEL | wxLC_VRULES | wxLC_REPORT);
 	case Style::kIcons:
+	case Style::kTiles:
 		return (wxLC_SINGLE_SEL | wxLC_ICON | wxLC_ALIGN_TOP | wxLC_AUTOARRANGE);
 	case Style::kSmallIcons:
 		return (wxLC_SINGLE_SEL | wxLC_ICON | wxLC_ALIGN_TOP | wxLC_AUTOARRANGE);
@@ -626,6 +635,7 @@ enum ContextMenuEntries
 	kContextMenuStyleList,
 	kContextMenuStyleIcon,
 	kContextMenuStyleIconSmall,
+	kContextMenuStyleTiles,
 
     kContextMenuCreateShortcut,
 
@@ -688,7 +698,12 @@ void wxGameList::OnContextMenu(wxContextMenuEvent& event)
 	menu.AppendRadioItem(kContextMenuStyleList, _("Style: &List"))->Check(m_style == Style::kList);
 	menu.AppendRadioItem(kContextMenuStyleIcon, _("Style: &Icons"))->Check(m_style == Style::kIcons);
 	menu.AppendRadioItem(kContextMenuStyleIconSmall, _("Style: &Small Icons"))->Check(m_style == Style::kSmallIcons);
-	PopupMenu(&menu);
+	menu.AppendRadioItem(kContextMenuStyleTiles, _("Style: &Tiles (console)"))->Check(m_style == Style::kTiles);
+	// when the tile view is active this list is hidden, so open the menu on the visible window
+	if (m_style == Style::kTiles && m_tileView)
+		m_tileView->PopupMenu(&menu);
+	else
+		PopupMenu(&menu);
 }
 
 void wxGameList::OnContextMenuSelected(wxCommandEvent& event)
@@ -852,6 +867,9 @@ void wxGameList::OnContextMenuSelected(wxCommandEvent& event)
 		break;
 	case kContextMenuStyleIconSmall:
 		SetStyle(Style::kSmallIcons);
+		break;
+	case kContextMenuStyleTiles:
+		SetStyle(Style::kTiles);
 		break;
 	}
 }
@@ -1136,7 +1154,7 @@ void wxGameList::OnTimerBulkAddEntriesToGameList(wxTimerEvent& event)
 		{
 			// entry doesn't exist
 			const int initialImage = m_style == Style::kList ? -1 :
-				(m_style == Style::kIcons ? icon : icon_small);
+				(IsLargeIconStyle() ? icon : icon_small);
 			index = InsertItem(index, wxString::FromUTF8(GetNameByTitleId(baseTitleId)), initialImage);
 			SetItemPtrData(index, baseTitleId);
 			isNewEntry = true;
@@ -1195,7 +1213,7 @@ void wxGameList::OnTimerBulkAddEntriesToGameList(wxTimerEvent& event)
 			SetItem(index, ColumnRegion, wxGetTranslation(region_text));
 	        SetItem(index, ColumnTitleID, fmt::format("{:016x}", baseTitleId));
 		}
-		else if (m_style == Style::kIcons)
+		else if (IsLargeIconStyle())
 		{
 			SetItemImage(index, icon);
 		}
@@ -1228,6 +1246,224 @@ void wxGameList::OnGameEntryUpdatedByTitleId(wxTitleIdEvent& event)
 		m_bulkUpdateTimer.StartOnce(100); // if timer is started already this will delay it
 	const auto titleId = event.GetTitleId();
 	m_bulkTitlesToAdd.emplace_back(titleId);
+}
+
+void wxGameList::SetTileView(wxGameTileView* tileView)
+{
+	m_tileView = tileView;
+	UpdateViewVisibility();
+}
+
+bool wxGameList::IsLibraryVisible() const
+{
+	return IsShown() || (m_tileView && m_tileView->IsShown());
+}
+
+void wxGameList::UpdateViewVisibility()
+{
+	if (!m_tileView)
+		return;
+	const bool tiles = m_style == Style::kTiles;
+	if (tiles)
+	{
+		// carry the current selection over to the tile view
+		const auto selection = GetFirstSelected();
+		Show(false);
+		m_tileView->Show(true);
+		if (selection != wxNOT_FOUND)
+			m_tileView->SelectTitle((uint64_t)GetItemData(selection));
+	}
+	else
+	{
+		m_tileView->Show(false);
+		Show(true);
+	}
+	if (wxWindow* parent = GetParent())
+		parent->Layout();
+	// the classic menu bar is hidden while the tile view is active
+	if (g_mainFrame)
+		g_mainFrame->UpdateMenuForLibrary();
+}
+
+std::vector<wxGameTileEntry> wxGameList::GetTileEntries()
+{
+	std::vector<wxGameTileEntry> entries;
+	const int count = GetItemCount();
+	entries.reserve(count);
+	for (int i = 0; i < count; ++i)
+	{
+		const uint64 titleId = (uint64)GetItemData(i);
+		if (titleId == kDefaultEntryData)
+			continue;
+
+		wxGameTileEntry entry;
+		entry.titleId = titleId;
+		entry.name = GetItemText(i);
+
+		wxListItem item;
+		item.SetId(i);
+		item.SetMask(wxLIST_MASK_IMAGE);
+		GetItem(item);
+		const int imageIndex = item.GetImage();
+		entry.iconKey = (uint64_t)(imageIndex + 1);
+		{
+			std::lock_guard<std::mutex> artLock(m_icon_cache_mtx);
+			const auto artIt = m_art_cache.find(titleId);
+			if (artIt != m_art_cache.end())
+				entry.art = artIt->second;
+		}
+		if (imageIndex >= 0 && imageIndex < m_image_list_data.GetImageCount())
+			entry.icon = m_image_list_data.GetBitmap(imageIndex);
+
+		iosu::pdm::GameListStat stat;
+		if (iosu::pdm::GetStatForGamelist(titleId, stat))
+		{
+			const uint32 minutesPlayed = stat.numMinutesPlayed;
+			entry.minutesPlayed = minutesPlayed;
+			if (minutesPlayed > 0 && minutesPlayed < 60)
+				entry.playtime = formatWxString(wxPLURAL("{} minute", "{} minutes", minutesPlayed), minutesPlayed);
+			else if (minutesPlayed >= 60)
+			{
+				const uint32 hours = minutesPlayed / 60;
+				const uint32 minutes = minutesPlayed % 60;
+				entry.playtime = formatWxString(wxPLURAL("{} hour", "{} hours", hours), hours) + " " + formatWxString(wxPLURAL("{} minute", "{} minutes", minutes), minutes);
+			}
+			if (stat.last_played.year != 0)
+			{
+				entry.lastPlayedKey = stat.last_played.year * 10000 + stat.last_played.month * 100 + stat.last_played.day;
+				const wxDateTime tmp((wxDateTime::wxDateTime_t)stat.last_played.day, (wxDateTime::Month)stat.last_played.month, (wxDateTime::wxDateTime_t)stat.last_played.year, 0, 0, 0, 0);
+				entry.lastPlayed = tmp.FormatDate();
+			}
+			else
+				entry.lastPlayed = wxString::FromUTF8("nunca");
+		}
+		else
+			entry.lastPlayed = wxString::FromUTF8("nunca");
+
+		entries.emplace_back(std::move(entry));
+	}
+	return entries;
+}
+
+uint64_t wxGameList::GetTileRevision()
+{
+	// cheap fingerprint of everything the tile view displays (order, names, icons)
+	uint64_t hash = 1469598103934665603ull ^ (uint64_t)GetItemCount();
+	const int count = GetItemCount();
+	for (int i = 0; i < count; ++i)
+	{
+		hash = (hash ^ (uint64_t)GetItemData(i)) * 1099511628211ull;
+		wxListItem item;
+		item.SetId(i);
+		item.SetMask(wxLIST_MASK_IMAGE);
+		GetItem(item);
+		hash = (hash ^ (uint64_t)(item.GetImage() + 2)) * 1099511628211ull;
+		hash = (hash ^ (uint64_t)std::hash<std::wstring>{}(GetItemText(i).ToStdWstring())) * 1099511628211ull;
+	}
+	return hash;
+}
+
+void wxGameList::LaunchTitle(uint64 titleId)
+{
+	if (titleId == 0 || titleId == kDefaultEntryData)
+		return;
+	TitleInfo titleInfo;
+	if (!CafeTitleList::GetFirstByTitleId(titleId, titleInfo))
+		return;
+	if (!titleInfo.IsValid())
+		return;
+	MainWindow::RequestLaunchGame(titleInfo.GetPath(), wxLaunchGameEvent::INITIATED_BY::GAME_LIST);
+}
+
+void wxGameList::ShowContextMenuForTitle(uint64 titleId)
+{
+	// the context menu works on the list selection, so mirror the tile selection here
+	long selected;
+	while ((selected = GetFirstSelected()) != wxNOT_FOUND)
+		Select(selected, false);
+	if (titleId != 0)
+	{
+		const long index = FindListItemByTitleId(titleId);
+		if (index != wxNOT_FOUND)
+			Select(index);
+	}
+	wxContextMenuEvent menuEvent(wxEVT_CONTEXT_MENU, GetId(), wxGetMousePosition());
+	OnContextMenu(menuEvent);
+}
+
+// rows of the tile view options panel; ids are the context menu entries, so the existing handlers do the work
+std::vector<wxGameTileOption> wxGameList::GetTileOptions(uint64 titleId)
+{
+	std::vector<wxGameTileOption> options;
+	auto add = [&](int id, const char* label, bool enabled = true) {
+		options.push_back({id, wxString::FromUTF8(label), enabled});
+	};
+
+	GameInfo2 gameInfo = CafeTitleList::GetGameInfo(titleId);
+	if (gameInfo.IsValid())
+	{
+		std::error_code ec;
+		add(kContextMenuEditName, "Editar nombre");
+		add(kContextMenuEditGameProfile, "Perfil del juego");
+		add(kContextMenuEditGraphicPacks, "Packs gráficos");
+		add(kContextMenuGameFolder, "Abrir carpeta del juego");
+		add(kContextMenuSaveFolder, "Abrir carpeta de partidas", fs::is_directory(gameInfo.GetSaveFolder(), ec));
+		add(kContextMenuCopyTitleId, "Copiar Title ID");
+		add(kContextMenuRemoveCache, "Borrar cachés de shaders", !_getCachesPaths(gameInfo.GetBaseTitleId()).empty());
+	}
+	options.push_back({0, wxString::FromUTF8("Biblioteca"), true});
+	add(kContextMenuRefreshGames, "Actualizar lista de juegos", !CafeTitleList::IsScanning());
+	add(kContextMenuStyleList, "Vista de lista");
+	add(kContextMenuStyleIcon, "Vista de iconos");
+	return options;
+}
+
+void wxGameList::ExecuteTileOption(uint64 titleId, int id)
+{
+	// reuse the context menu handler: it reads the title id from the menu's client data
+	wxMenu menu;
+	menu.SetClientData((void*)titleId);
+	wxCommandEvent menuEvent(wxEVT_MENU, id);
+	menuEvent.SetEventObject(&menu);
+	OnContextMenuSelected(menuEvent);
+}
+
+// "Detalles del juego" page of the tile view: facts about the title, the graphic packs enabled for it and two shortcuts
+wxGameTileDetails wxGameList::GetTileDetails(uint64 titleId)
+{
+	wxGameTileDetails details;
+	GameInfo2 gameInfo = CafeTitleList::GetGameInfo(titleId);
+	if (!gameInfo.IsValid())
+		return details;
+
+	auto add = [&](const char* label, const wxString& value, bool copy = false) {
+		details.info.push_back({wxString::FromUTF8(label), value, copy});
+	};
+	const wxString no = wxString::FromUTF8("No");
+	add("Title ID", wxString::FromUTF8(fmt::format("{:016x}", gameInfo.GetBaseTitleId())), true);
+	add("Región", wxGetTranslation(fmt::format("{}", gameInfo.GetRegion())));
+	add("Versión", wxString::Format("v%d", (int)gameInfo.GetVersion()));
+	add("Actualización", gameInfo.HasUpdate() ? wxString::Format("v%d", (int)gameInfo.GetUpdate().GetAppTitleVersion()) : no);
+	add("DLC", gameInfo.HasAOC() ? wxString::Format("v%d", (int)gameInfo.GetAOCVersion()) : no);
+
+	// graphic packs the user enabled that apply to this title (the same test Cemu does when the game starts)
+	for (const auto& graphicPack : GraphicPack2::GetGraphicPacks())
+	{
+		if (!graphicPack->IsEnabled() || !graphicPack->ContainsTitleId(titleId))
+			continue;
+		wxString presets;
+		for (const auto& preset : graphicPack->GetActivePresets())
+		{
+			if (!presets.empty())
+				presets += ", ";
+			presets += wxString::FromUTF8(preset->name);
+		}
+		details.packs.push_back({wxString::FromUTF8(graphicPack->GetName()), presets, false});
+	}
+
+	details.actions.push_back({kContextMenuEditGameProfile, wxString::FromUTF8("Editar perfil del juego"), true});
+	details.actions.push_back({kContextMenuEditGraphicPacks, wxString::FromUTF8("Editar packs gráficos"), true});
+	return details;
 }
 
 void wxGameList::OnItemActivated(wxListEvent& event)
@@ -1339,6 +1575,8 @@ void wxGameList::AsyncWorkerThread()
 		m_async_worker_mutex.unlock();
 		if (!hasJob)
 			continue;
+		if (!m_async_worker_active)
+			break; // closing: do not start another (slow) mount + decode
 		if(m_icon_loaded.find(titleId) != m_icon_loaded.end())
 			continue;
 		m_icon_loaded.emplace(titleId);
@@ -1358,6 +1596,34 @@ void wxGameList::AsyncWorkerThread()
 			{
 				auto decompressed = zlibDecompress(*tgaData, 70*1024);
 				std::swap(tgaData, decompressed);
+			}
+		}
+		// game art for the tile view background (optional, the tile view falls back to a colour wash without it)
+		{
+			auto artData = fsc_extractFile((tempMountPath + "/meta/bootTvTex.tga").c_str());
+			if (!artData)
+			{
+				artData = fsc_extractFile((tempMountPath + "/meta/bootTvTex.tga.gz").c_str());
+				if (artData)
+				{
+					auto decompressed = zlibDecompress(*artData, 2 * 1024 * 1024);
+					std::swap(artData, decompressed);
+				}
+			}
+			if (artData && artData->size() > 16)
+			{
+				wxMemoryInputStream artStream(artData->data(), artData->size());
+				wxImage art(artStream);
+				if (art.IsOk() && art.GetWidth() > 0 && art.GetHeight() > 0)
+				{
+					if (art.HasAlpha())
+						art.ClearAlpha();
+					art = art.Scale(kArtWidth, kArtHeight, wxIMAGE_QUALITY_HIGH);
+					auto shared = std::make_shared<const wxImage>(std::move(art));
+					m_icon_cache_mtx.lock();
+					m_art_cache[titleId] = std::move(shared);
+					m_icon_cache_mtx.unlock();
+				}
 			}
 		}
 		bool iconSuccessfullyLoaded = false;

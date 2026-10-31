@@ -316,7 +316,7 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 		m_update_graphicPacks->Bind(wxEVT_BUTTON, &GraphicPacksWindow2::OnCheckForUpdates, this);
 		row->Add(m_update_graphicPacks, 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
 
-		m_download_from_url = new wxHyperlinkCtrl(m_right_panel, wxID_ANY, _("Or download pack from URL..."), _(""));
+		m_download_from_url = new wxHyperlinkCtrl(m_right_panel, wxID_ANY, wxString::FromUTF8("O descargar un pack desde una URL..."), _(""));
 		m_download_from_url->Bind(wxEVT_HYPERLINK, &GraphicPacksWindow2::OnClickCustomDownload, this);
 		row->Add(m_download_from_url, 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
 
@@ -336,6 +336,7 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 	main_sizer->Add(m_info_bar, 0, wxALL | wxEXPAND, 5);
 
 	SetSizer(main_sizer);
+	Centre(wxBOTH);
 
 	UpdateTitleRunning(CafeSystem::IsTitleRunning());
 	FillGraphicPackList();

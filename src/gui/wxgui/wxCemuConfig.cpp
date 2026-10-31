@@ -4,8 +4,91 @@
 #include "config/XMLConfig.h"
 #include "util/helpers/helpers.h"
 #include <wx/language.h>
+#include <algorithm>
 
 XMLWxCemuConfig_t g_wxConfig(&GetConfigHandle);
+
+std::vector<uint64_t> wxCemuConfig::GetTileFavorites() const
+{
+	std::vector<uint64_t> result;
+	size_t pos = 0;
+	while (pos < tile_favorites.size())
+	{
+		size_t end = tile_favorites.find(',', pos);
+		if (end == std::string::npos)
+			end = tile_favorites.size();
+		if (end > pos)
+		{
+			const std::string token = tile_favorites.substr(pos, end - pos);
+			char* endPtr = nullptr;
+			const uint64_t value = std::strtoull(token.c_str(), &endPtr, 16);
+			if (endPtr != token.c_str() && value != 0)
+				result.push_back(value);
+		}
+		pos = end + 1;
+	}
+	return result;
+}
+
+void wxCemuConfig::SetTileFavorites(const std::vector<uint64_t>& titleIds)
+{
+	std::string text;
+	for (const uint64_t titleId : titleIds)
+	{
+		if (!text.empty())
+			text += ',';
+		text += fmt::format("{:016x}", titleId);
+	}
+	tile_favorites = text;
+}
+
+std::vector<uint64_t> wxCemuConfig::GetTileHidden() const
+{
+	std::vector<uint64_t> result;
+	size_t pos = 0;
+	while (pos < tile_hidden.size())
+	{
+		size_t end = tile_hidden.find(',', pos);
+		if (end == std::string::npos)
+			end = tile_hidden.size();
+		if (end > pos)
+		{
+			const std::string token = tile_hidden.substr(pos, end - pos);
+			char* endPtr = nullptr;
+			const uint64_t value = std::strtoull(token.c_str(), &endPtr, 16);
+			if (endPtr != token.c_str() && value != 0)
+				result.push_back(value);
+		}
+		pos = end + 1;
+	}
+	return result;
+}
+
+void wxCemuConfig::SetTileHidden(const std::vector<uint64_t>& titleIds)
+{
+	std::string text;
+	for (const uint64_t titleId : titleIds)
+	{
+		if (!text.empty())
+			text += ',';
+		text += fmt::format("{:016x}", titleId);
+	}
+	tile_hidden = text;
+}
+
+void wxCemuConfig::GetTileState(int& tab, uint64_t& selected, uint64_t& launched) const
+{
+	tab = tile_last_tab;
+	selected = tile_last_selected.empty() ? 0 : std::strtoull(tile_last_selected.c_str(), nullptr, 16);
+	launched = tile_last_launched.empty() ? 0 : std::strtoull(tile_last_launched.c_str(), nullptr, 16);
+}
+
+void wxCemuConfig::SetTileState(int tab, uint64_t selected, uint64_t launched)
+{
+	tile_last_tab = tab;
+	tile_last_selected = selected ? fmt::format("{:016x}", selected) : std::string();
+	tile_last_launched = launched ? fmt::format("{:016x}", launched) : std::string();
+}
 
 void wxCemuConfig::AddRecentlyLaunchedFile(std::string_view file)
 {
@@ -25,7 +108,7 @@ void wxCemuConfig::AddRecentNfcFile(std::string_view file)
 
 void wxCemuConfig::Load(XMLConfigParser& parser)
 {
-	language = parser.get<sint32>("language", wxLANGUAGE_DEFAULT);
+	language = parser.get<sint32>("language", wxLANGUAGE_SPANISH);
 	msw_theme = parser.get<sint32>("msw_theme", msw_theme);
 	use_discord_presence = parser.get("use_discord_presence", true);
 	fullscreen_menubar = parser.get("fullscreen_menubar", false);
@@ -37,12 +120,13 @@ void wxCemuConfig::Load(XMLConfigParser& parser)
 	did_show_graphic_pack_download = parser.get("gp_download", did_show_graphic_pack_download);
 	did_show_macos_disclaimer = parser.get("macos_disclaimer", did_show_macos_disclaimer);
 	fullscreen = parser.get("fullscreen", fullscreen);
+	borderless_fullscreen = parser.get("borderless_fullscreen", borderless_fullscreen);
 
-	window_position.x = parser.get("window_position").get("x", -1);
-	window_position.y = parser.get("window_position").get("y", -1);
+	window_position.x = parser.get("window_position").get("x", 0);
+	window_position.y = parser.get("window_position").get("y", 0);
 
-	window_size.x = parser.get("window_size").get("x", -1);
-	window_size.y = parser.get("window_size").get("y", -1);
+	window_size.x = parser.get("window_size").get("x", 0);
+	window_size.y = parser.get("window_size").get("y", 0);
 	window_maximized = parser.get("window_maximized", false);
 
 	pad_open = parser.get("open_pad", false);
@@ -54,10 +138,22 @@ void wxCemuConfig::Load(XMLConfigParser& parser)
 	pad_maximized = parser.get("pad_maximized", false);
 
 	auto gamelist = parser.get("GameList");
-	game_list_style = gamelist.get("style", 0);
+	game_list_style = gamelist.get("style", 3);
 	game_list_column_order = gamelist.get("order", "");
 
 	show_icon_column = parser.get("show_icon_column", true);
+	tile_favorites = parser.get("tile_favorites", "");
+	tile_hidden = parser.get("tile_hidden", "");
+	tile_show_hidden = parser.get("tile_show_hidden", false);
+	tile_last_tab = parser.get<sint32>("tile_last_tab", 0);
+	tile_button_style = parser.get<sint32>("tile_button_style", 0);
+	tile_sort = std::clamp<sint32>(parser.get<sint32>("tile_sort", 0), 0, 2);
+	tile_size = std::clamp<sint32>(parser.get<sint32>("tile_size", 1), 0, 2);
+	tile_accent = std::clamp<sint32>(parser.get<sint32>("tile_accent", 0), 0, 6);
+	tile_volume_done = parser.get("tile_volume_done", false);
+	tile_last_selected = parser.get("tile_last_selected", "");
+	tile_last_launched = parser.get("tile_last_launched", "");
+	tile_sound = parser.get("tile_sound", true);
 
 	// return default width if value in config file out of range
 	auto loadColumnSize = [&gamelist](const char* name, uint32 defaultWidth) {
@@ -113,6 +209,7 @@ void wxCemuConfig::Load(XMLConfigParser& parser)
 	hotkeys.exitFullscreen = xml_hotkeys.get("ExitFullscreen", sHotkeyCfg{uKeyboardHotkey{WXK_ESCAPE}});
 	hotkeys.toggleFullscreen = xml_hotkeys.get("ToggleFullscreen", sHotkeyCfg{uKeyboardHotkey{WXK_F11}});
 	hotkeys.toggleFullscreenAlt = xml_hotkeys.get("ToggleFullscreenAlt", sHotkeyCfg{uKeyboardHotkey{WXK_CONTROL_M, true}}); // ALT+ENTER
+	hotkeys.openGameMenu = xml_hotkeys.get("OpenGameMenu", sHotkeyCfg{uKeyboardHotkey{WXK_F1}});
 	hotkeys.takeScreenshot = xml_hotkeys.get("TakeScreenshot", sHotkeyCfg{uKeyboardHotkey{WXK_F12}});
 	hotkeys.toggleFastForward = xml_hotkeys.get("ToggleFastForward", sHotkeyCfg{});
 	hotkeys.exitApplication = xml_hotkeys.get("ExitApplication", sHotkeyCfg{});
@@ -136,6 +233,7 @@ void wxCemuConfig::Save(XMLConfigParser& config)
 	config.set<bool>("gp_download", did_show_graphic_pack_download);
 	config.set<bool>("macos_disclaimer", did_show_macos_disclaimer);
 	config.set<bool>("fullscreen", fullscreen);
+	config.set<bool>("borderless_fullscreen", borderless_fullscreen);
 
 	auto wpos = config.set("window_position");
 	wpos.set<sint32>("x", window_position.x);
@@ -154,6 +252,18 @@ void wxCemuConfig::Save(XMLConfigParser& config)
 	psize.set<sint32>("y", pad_size.y);
 	config.set<bool>("pad_maximized", pad_maximized);
 	config.set<bool>("show_icon_column", show_icon_column);
+	config.set("tile_favorites", tile_favorites);
+	config.set("tile_hidden", tile_hidden);
+	config.set<bool>("tile_show_hidden", tile_show_hidden);
+	config.set<sint32>("tile_last_tab", tile_last_tab);
+	config.set<sint32>("tile_button_style", tile_button_style);
+	config.set<sint32>("tile_sort", tile_sort);
+	config.set<sint32>("tile_size", tile_size);
+	config.set<sint32>("tile_accent", tile_accent);
+	config.set<bool>("tile_volume_done", tile_volume_done);
+	config.set("tile_last_selected", tile_last_selected);
+	config.set("tile_last_launched", tile_last_launched);
+	config.set<bool>("tile_sound", tile_sound);
 
 	auto gamelist = config.set("GameList");
 	gamelist.set("style", game_list_style);
@@ -184,6 +294,7 @@ void wxCemuConfig::Save(XMLConfigParser& config)
 	xml_hotkeys.set("ExitFullscreen", hotkeys.exitFullscreen);
 	xml_hotkeys.set("ToggleFullscreen", hotkeys.toggleFullscreen);
 	xml_hotkeys.set("ToggleFullscreenAlt", hotkeys.toggleFullscreenAlt);
+	xml_hotkeys.set("OpenGameMenu", hotkeys.openGameMenu);
 	xml_hotkeys.set("TakeScreenshot", hotkeys.takeScreenshot);
 	xml_hotkeys.set("ToggleFastForward", hotkeys.toggleFastForward);
 	xml_hotkeys.set("ExitApplication", hotkeys.exitApplication);

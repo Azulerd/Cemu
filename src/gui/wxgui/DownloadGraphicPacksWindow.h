@@ -9,12 +9,15 @@
 #include <wx/dialog.h>
 #include <wx/timer.h>
 #include <wx/gauge.h>
+#include <wx/stattext.h>
+#include <wx/button.h>
 
 
 class DownloadGraphicPacksWindow : public wxDialog
 {
 public:
-	DownloadGraphicPacksWindow(wxWindow* parent);
+	// askFirst: show a short explanation with "Descargar ahora" / "Más tarde" before anything is downloaded (used by the setup assistant)
+	DownloadGraphicPacksWindow(wxWindow* parent, bool askFirst = false);
 	~DownloadGraphicPacksWindow();
 
 	const std::string& GetException() const;
@@ -24,9 +27,11 @@ public:
 
 	void OnUpdate(const wxTimerEvent& event);
 	void OnCancelButton(const wxCommandEvent& event);
+	void OnStartButton(const wxCommandEvent& event);
 
 private:
 	void UpdateThread();
+	void StartDownload();
 
 	enum ThreadState_t
 	{
@@ -51,6 +56,11 @@ private:
 
 	DownloadStage_t m_currentStage;
 	wxGauge* m_processBar;
+	wxStaticText* m_statusText;
+	wxButton* m_startButton;
+	wxButton* m_laterButton;
+	wxButton* m_cancelButton;
+	bool m_askFirst;
 	wxTimer* m_timer;
 
 	struct curlDownloadFileState_t;

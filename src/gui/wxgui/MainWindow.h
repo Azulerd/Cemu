@@ -1,6 +1,7 @@
 #pragma once
 
 #include <wx/wx.h>
+#include <wx/weakref.h>
 #include <wx/dataview.h>
 #include <wx/infobar.h>
 
@@ -71,8 +72,11 @@ public:
 	[[nodiscard]] bool IsGameLaunched() const { return m_game_launched; }
 
 	void SetFullScreen(bool state);
+	void OnCharHook(wxKeyEvent& event);
+	void OpenGameMenu(); // in-game menu (same as the - + chord of the controller), used by the keyboard hotkey
 	void EndEmulation();
 	void SetMenuVisible(bool state);
+	void UpdateMenuForLibrary(); // the classic menu bar is hidden while the tile view is shown
 	void UpdateNFCMenu();
 	bool IsMenuHidden() const;
 	void TogglePadView();
@@ -100,6 +104,8 @@ public:
 	void OnLaunchFromFile(wxLaunchGameEvent& event);
 	void OnInstallUpdate(wxCommandEvent& event);
 	void OnFileExit(wxCommandEvent& event);
+	void OnBackToLibrary(wxCommandEvent& event);
+	void GoBackToLibrary();
 	void OnNFCMenu(wxCommandEvent& event);
 	void OnOptionsInput(wxCommandEvent& event);
 	void OnAccountSelect(wxCommandEvent& event);
@@ -149,6 +155,12 @@ public:
 private:
 	bool FullscreenEnabled() const;
 	void RecreateMenu();
+	std::vector<wxGameTileMenuItem> GetTileMenu();
+	void ExecuteTileMenuCommand(int id);
+	void CreateGameMenuOverlay(); // in-game menu opened with - and + on the controller
+	int GetDisplayMode() const;   // 0 = window, 1 = fullscreen, 2 = fullscreen without border
+	void SetDisplayMode(int mode);
+	void SetBorderless(bool state);
 	void UpdateChildWindowTitleRunningState();
 	static wxString GetInitialWindowTitle();
 
@@ -180,6 +192,14 @@ private:
 
 	bool m_menu_visible = false;
 	bool m_game_launched = false;
+	wxWeakRef<wxFrame> m_loadSplash; // loading splash shown after starting a game from the library
+	bool m_volumeDirty = false; // volume changed from the in-game menu, saved when it closes
+
+	// "fullscreen without border": borderless window over the usable area of the monitor (the taskbar stays visible)
+	bool m_borderless = false;
+	wxRect m_borderlessSavedRect;
+	bool m_borderlessSavedMaximized = false;
+	intptr_t m_borderlessSavedStyle = 0;
 
 	#ifdef ENABLE_DISCORD_RPC
 	std::unique_ptr<DiscordPresence> m_discord;
@@ -205,6 +225,9 @@ private:
 
 	// rendering
 	wxWindow* m_render_canvas{};
+
+	// in-game menu (see wxGameMenuOverlay), created when a game is launched
+	class wxGameMenuOverlay* m_gameMenuOverlay{};
 
 	// gamelist
 	wxGameList* m_game_list{};

@@ -63,6 +63,14 @@ namespace coreinit
 {
 	// scheduler state
 	std::atomic<bool> sSchedulerActive;
+	std::atomic<bool> sSchedulerPaused; // set from the UI to freeze all PPC cores (see OSSchedulerSetPaused)
+
+	// called by the core threads outside of the scheduler lock, blocks while the emulation is paused
+	static void __OSSchedulerWaitWhilePaused()
+	{
+		while (sSchedulerPaused.load(std::memory_order::relaxed) && sSchedulerActive.load(std::memory_order::relaxed))
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+	}
 	std::vector<std::thread> sSchedulerThreads;
 	std::mutex sSchedulerStateMtx;
 
@@ -1254,6 +1262,7 @@ namespace coreinit
 		__OSUnlockScheduler();
 		while (true)
 		{
+			__OSSchedulerWaitWhilePaused();
 			if (!g_coreRunQueueThreadCount[coreIndex].isZero()) // avoid hammering the lock on the main core if there is no runable thread
 			{
 				__OSLockScheduler();
@@ -1355,6 +1364,7 @@ namespace coreinit
 		__OSUnlockScheduler(); // lock is always held when switching to a fiber, so we need to unlock it here
 		while (true)
 		{
+			__OSSchedulerWaitWhilePaused(); // once per timeslice, no scheduler lock held here
 			if (hCPU->remainingCycles > 0)
 			{
 				// try to enter recompiler immediately
@@ -1455,6 +1465,7 @@ namespace coreinit
 	{
 		std::unique_lock _lock(sSchedulerStateMtx);
 		sSchedulerActive.store(false);
+		sSchedulerPaused.store(false);
 		for (size_t i = 0; i < Espresso::CORE_COUNT; i++)
 			g_coreRunQueueThreadCount[i].increment(); // make sure to wake up cores if they are paused and waiting for runnable threads
 		// wait for threads to stop execution
@@ -1485,6 +1496,29 @@ namespace coreinit
 	bool OSIsSchedulerActive()
 	{
 		return sSchedulerActive;
+	}
+
+	// pauses / resumes the whole PPC side of the emulation (all cores). The game clock is frozen while paused.
+	// the GPU keeps running until its queue is empty, no new frames arrive while paused
+	void OSSchedulerSetPaused(bool paused)
+	{
+		if (sSchedulerPaused.load() == paused)
+			return;
+		if (paused)
+		{
+			PPCTimer_setFrozen(true);
+			sSchedulerPaused.store(true);
+		}
+		else
+		{
+			sSchedulerPaused.store(false);
+			PPCTimer_setFrozen(false);
+		}
+	}
+
+	bool OSSchedulerIsPaused()
+	{
+		return sSchedulerPaused.load();
 	}
 
 	CafeStaticVar<OSThread_t, PPC_CORE_COUNT> s_defaultThreads{coreinit::g_coreinitStaticData};

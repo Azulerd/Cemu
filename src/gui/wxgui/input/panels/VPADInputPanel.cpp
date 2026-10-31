@@ -139,13 +139,13 @@ VPADInputPanel::VPADInputPanel(wxWindow* parent)
 	add_button_row(main_sizer, row, column, VPADController::kButtonId_Screen, _("show screen"));
 	row++;
 
-	auto toggleScreenText = new wxStaticText(this, wxID_ANY, _("toggle screen"));
+	auto toggleScreenText = new wxStaticText(this, wxID_ANY, wxString::FromUTF8("cambiar pantalla"));
 	main_sizer->Add(toggleScreenText,
 		wxGBPosition(row, column),
 		wxDefaultSpan,
 		wxALL | wxALIGN_CENTER_VERTICAL, 5);
 	m_togglePadViewCheckBox = new wxCheckBox(this, wxID_ANY, {}, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL);
-	wxString toggleScreenTT = _("Makes the \"show screen\" button toggle between the TV and gamepad screens");
+	wxString toggleScreenTT = wxString::FromUTF8("Hace que el botón \"mostrar pantalla\" alterne entre la pantalla de la TV y la del GamePad");
 	m_togglePadViewCheckBox->SetToolTip(toggleScreenTT);
 	toggleScreenText->SetToolTip(toggleScreenTT);
 	main_sizer->Add(m_togglePadViewCheckBox, wxGBPosition(row,column+1), wxDefaultSpan, wxALL | wxEXPAND, 5);

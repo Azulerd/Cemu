@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include <wx/stopwatch.h>
 
 // subwindows
 #include "TitleManager.h"
@@ -9,6 +10,8 @@
 #include "AudioDebuggerWindow.h"
 #include "input/InputSettings2.h"
 #include "input/HotkeySettings.h"
+#include "audio/IAudioAPI.h"
+#include "wxgui/components/wxGameLoadSplash.h"
 #include "debugger/DebuggerWindow2.h"
 #include "EmulatedUSBDevices/EmulatedUSBDeviceFrame.h"
 #include "windows/PPCThreadsViewer/DebugPPCThreadsWindow.h"
@@ -17,6 +20,15 @@
 //wxgui + misc.
 #include "wxgui.h"
 #include "wxCemuConfig.h"
+#include "CemuApp.h"
+#include "wxgui/components/wxGameMenuOverlay.h"
+#include <wx/display.h>
+#ifdef __WXMSW__
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <wx/msw/wrapwin.h>
+#endif
 #include "interface/WindowSystem.h"
 #include "wxHelper.h"
 #include "helpers/wxHelpers.h"
@@ -79,6 +91,7 @@ enum
 	MAINFRAME_MENU_ID_FILE_CLEAR_SPOTPASS_CACHE,
 	MAINFRAME_MENU_ID_FILE_EXIT,
 	MAINFRAME_MENU_ID_FILE_END_EMULATION,
+	MAINFRAME_MENU_ID_FILE_BACK_TO_LIBRARY,
 	MAINFRAME_MENU_ID_FILE_RECENT_0,
 	MAINFRAME_MENU_ID_FILE_RECENT_LAST = MAINFRAME_MENU_ID_FILE_RECENT_0 + 15,
 	// options
@@ -168,6 +181,7 @@ wxDEFINE_EVENT(wxEVT_REQUEST_GAME_EXIT, wxCommandEvent);
 wxBEGIN_EVENT_TABLE(MainWindow, wxFrame)
 EVT_TIMER(MAINFRAME_ID_TIMER1, MainWindow::OnTimer)
 EVT_CLOSE(MainWindow::OnClose)
+EVT_CHAR_HOOK(MainWindow::OnCharHook)
 EVT_SIZE(MainWindow::OnSizeEvent)
 EVT_DPI_CHANGED(MainWindow::OnDPIChangedEvent)
 EVT_MOVE(MainWindow::OnMove)
@@ -180,6 +194,7 @@ EVT_MENU(MAINFRAME_MENU_ID_FILE_OPEN_SHADERCACHE_FOLDER, MainWindow::OnOpenFolde
 EVT_MENU(MAINFRAME_MENU_ID_FILE_CLEAR_SPOTPASS_CACHE, MainWindow::OnClearSpotPassCache)
 EVT_MENU(MAINFRAME_MENU_ID_FILE_EXIT, MainWindow::OnFileExit)
 EVT_MENU(MAINFRAME_MENU_ID_FILE_END_EMULATION, MainWindow::OnFileMenu)
+EVT_MENU(MAINFRAME_MENU_ID_FILE_BACK_TO_LIBRARY, MainWindow::OnBackToLibrary)
 EVT_MENU_RANGE(MAINFRAME_MENU_ID_FILE_RECENT_0 + 0, MAINFRAME_MENU_ID_FILE_RECENT_LAST, MainWindow::OnFileMenu)
 // options -> region menu
 EVT_MENU_RANGE(MAINFRAME_MENU_ID_OPTIONS_ACCOUNT_1, MAINFRAME_MENU_ID_OPTIONS_ACCOUNT_12, MainWindow::OnAccountSelect)
@@ -385,6 +400,10 @@ MainWindow::MainWindow()
 
 MainWindow::~MainWindow()
 {
+	wxStopWatch destroyWatch;
+	delete m_gameMenuOverlay; // resumes the game if the menu was open; its windows are destroyed with this frame
+	m_gameMenuOverlay = nullptr;
+
 	if (m_padView)
 	{
 		m_padView->Destroy();
@@ -395,6 +414,7 @@ MainWindow::~MainWindow()
 
 	std::unique_lock lock(g_mutex);
 	g_mainFrame = nullptr;
+	cemuLog_log(LogType::Force, "[Cierre] destruir ventana principal: {} ms", destroyWatch.Time());
 }
 
 void MainWindow::CreateGameListAndStatusBar()
@@ -408,6 +428,90 @@ void MainWindow::CreateGameListAndStatusBar()
     m_game_list->Bind(wxEVT_OPEN_SETTINGS, [this](auto&) {OpenSettings(); });
     m_game_list->SetDropTarget(new wxGameDropTarget(this));
     sizer->Add(m_game_list, 1, wxEXPAND);
+
+    // console-style tile view (shown instead of the list when the "Tiles" style is selected)
+    auto* tileView = new wxGameTileView(m_main_panel);
+    tileView->onQueryRevision = [this]() -> uint64_t { return m_game_list ? m_game_list->GetTileRevision() : 0; };
+    tileView->onFetchEntries = [this]() { return m_game_list ? m_game_list->GetTileEntries() : std::vector<wxGameTileEntry>(); };
+    tileView->onLaunch = [this](uint64_t titleId) { if (m_game_list) m_game_list->LaunchTitle(titleId); };
+    tileView->onContextMenu = [this](uint64_t titleId) { if (m_game_list) m_game_list->ShowContextMenuForTitle(titleId); };
+    tileView->onOpenSettings = [this]() { OpenSettings(); };
+    tileView->onFetchOptions = [this](uint64_t titleId) { return m_game_list ? m_game_list->GetTileOptions(titleId) : std::vector<wxGameTileOption>(); };
+    tileView->onOption = [this](uint64_t titleId, int id) { if (m_game_list) m_game_list->ExecuteTileOption(titleId, id); };
+    tileView->onFetchDetails = [this](uint64_t titleId) { return m_game_list ? m_game_list->GetTileDetails(titleId) : wxGameTileDetails(); };
+    tileView->onFetchMenu = [this]() { return GetTileMenu(); };
+    tileView->onMenuCommand = [this](int id) { ExecuteTileMenuCommand(id); };
+    tileView->onQuit = [this]() { Close(); };
+    tileView->onGetSortMode = []() { return GetWxGUIConfig().tile_sort; };
+    tileView->onSetSortMode = [](int mode) {
+        auto lock = GetConfigHandle().Lock();
+        GetWxGUIConfig().tile_sort = mode;
+        g_wxConfig.Save();
+    };
+    tileView->onGetTileSize = []() { return GetWxGUIConfig().tile_size; };
+    tileView->onSetTileSize = [](int size) {
+        auto lock = GetConfigHandle().Lock();
+        GetWxGUIConfig().tile_size = size;
+        g_wxConfig.Save();
+    };
+    tileView->onGetAccent = []() { return GetWxGUIConfig().tile_accent; };
+    tileView->onSetAccent = [](int accent) {
+        auto lock = GetConfigHandle().Lock();
+        GetWxGUIConfig().tile_accent = accent;
+        g_wxConfig.Save();
+    };
+    tileView->onGetButtonStyle = []() { return GetWxGUIConfig().tile_button_style; };
+    tileView->onSetButtonStyle = [](int style) {
+        auto lock = GetConfigHandle().Lock();
+        GetWxGUIConfig().tile_button_style = style;
+        g_wxConfig.Save();
+    };
+    tileView->onLaunchSplash = [this](const wxString& name, const wxBitmap& icon, const std::shared_ptr<const wxImage>& art) {
+        if (!m_loadSplash)
+            m_loadSplash = new wxGameLoadSplash(this, name, icon, art);
+    };
+    tileView->onLaunchSplashCancel = [this]() {
+        if (m_loadSplash)
+            static_cast<wxGameLoadSplash*>(m_loadSplash.get())->Dismiss();
+    };
+    tileView->onLoadState = []() {
+        wxGameTileState state;
+        GetWxGUIConfig().GetTileState(state.tab, state.selected, state.launched);
+        return state;
+    };
+    tileView->onSaveState = [](const wxGameTileState& state) {
+        auto lock = GetConfigHandle().Lock();
+        GetWxGUIConfig().SetTileState(state.tab, state.selected, state.launched);
+        g_wxConfig.Save();
+    };
+    tileView->onLoadFavorites = []() { return GetWxGUIConfig().GetTileFavorites(); };
+    tileView->onSaveFavorites = [](const std::vector<uint64_t>& titleIds) {
+        auto lock = GetConfigHandle().Lock();
+        GetWxGUIConfig().SetTileFavorites(titleIds);
+        g_wxConfig.Save();
+    };
+    tileView->onLoadHidden = []() { return GetWxGUIConfig().GetTileHidden(); };
+    tileView->onSaveHidden = [](const std::vector<uint64_t>& titleIds) {
+        auto lock = GetConfigHandle().Lock();
+        GetWxGUIConfig().SetTileHidden(titleIds);
+        g_wxConfig.Save();
+    };
+    tileView->onLoadShowHidden = []() { return (bool)GetWxGUIConfig().tile_show_hidden.GetValue(); };
+    tileView->onSaveShowHidden = [](bool show) {
+        auto lock = GetConfigHandle().Lock();
+        GetWxGUIConfig().tile_show_hidden = show;
+        g_wxConfig.Save();
+    };
+    tileView->onLoadSoundEnabled = []() { return (bool)GetWxGUIConfig().tile_sound.GetValue(); };
+    tileView->onSaveSoundEnabled = [](bool enabled) {
+        auto lock = GetConfigHandle().Lock();
+        GetWxGUIConfig().tile_sound = enabled;
+        g_wxConfig.Save();
+    };
+    tileView->SetDropTarget(new wxGameDropTarget(this));
+    sizer->Add(tileView, 1, wxEXPAND);
+    tileView->Hide();
+    m_game_list->SetTileView(tileView);
 
     // info, warning bar
     m_info_bar = new wxInfoBar(m_main_panel);
@@ -433,11 +537,12 @@ void MainWindow::DestroyGameListAndStatusBar()
 
 wxString MainWindow::GetInitialWindowTitle()
 {
-	return BUILD_VERSION_WITH_NAME_STRING;
+	return "Cemu Pro"; // window title without version/hash
 }
 
 void MainWindow::OnClose(wxCloseEvent& event)
 {
+	wxStopWatch closeWatch; // timings go to the log to find out what makes closing slow
 	if (m_debugger_window)
 	{
 		m_debugger_window->CleanupForDestroy();
@@ -448,16 +553,24 @@ void MainWindow::OnClose(wxCloseEvent& event)
 	if(m_game_list)
 		m_game_list->OnClose(event);
 
-	if (!IsMaximized() && !WindowSystem::IsFullScreen())
+	if (!IsMaximized() && !IsIconized() && !WindowSystem::IsFullScreen() && !m_borderless)
+	{
 		m_restored_size = GetSize();
+		m_restored_position = GetPosition();
+	}
 
+	const long tBeforeSave = closeWatch.Time();
 	SaveSettings();
 	m_timer->Stop();
+	const long tAfterSave = closeWatch.Time();
 
 	event.Skip();
 
     CafeSystem::Shutdown();
+	const long tAfterCafe = closeWatch.Time();
 	DestroyCanvas();
+	cemuLog_log(LogType::Force, "[Cierre] lista: {} ms, guardar config: {} ms, CafeSystem::Shutdown: {} ms, canvas: {} ms, total: {} ms",
+				tBeforeSave, tAfterSave - tBeforeSave, tAfterCafe - tAfterSave, closeWatch.Time() - tAfterCafe, closeWatch.Time());
 }
 
 bool MainWindow::InstallUpdate(const fs::path& metaFilePath)
@@ -583,6 +696,8 @@ bool MainWindow::FileLoad(const fs::path launchPath, wxLaunchGameEvent::INITIATE
     DestroyGameListAndStatusBar();
 
 	m_game_launched = true;
+	UpdateMenuForLibrary(); // the library is gone, bring the menu bar back
+	CreateGameMenuOverlay();
 	m_loadMenuItem->Enable(false);
 	m_installUpdateMenuItem->Enable(false);
 	m_memorySearcherMenuItem->Enable(true);
@@ -598,6 +713,8 @@ bool MainWindow::FileLoad(const fs::path launchPath, wxLaunchGameEvent::INITIATE
 
 	if (FullscreenEnabled())
 		SetFullScreen(true);
+	else if (GetWxGUIConfig().borderless_fullscreen)
+		SetBorderless(true);
 
     //GameMode support
 #if BOOST_OS_LINUX && defined(ENABLE_FERAL_GAMEMODE)
@@ -787,6 +904,26 @@ void MainWindow::OnNFCMenu(wxCommandEvent& event)
 			}
 		}
 	}
+}
+
+// closes the running game and starts Cemu again, which opens straight on the library (no game launch arguments are passed on)
+void MainWindow::OnBackToLibrary(wxCommandEvent& event)
+{
+	if (!m_game_launched)
+		return;
+	const int answer = wxMessageBox(wxString::FromUTF8("Se cerrará el juego y Cemu volverá a abrirse en la biblioteca.\nSe perderá el progreso que no hayas guardado.\n\n¿Continuar?"),
+									wxString::FromUTF8("Volver a la biblioteca"), wxYES_NO | wxNO_DEFAULT | wxICON_QUESTION, this);
+	if (answer != wxYES)
+		return;
+	GoBackToLibrary();
+}
+
+// no question asked: the in-game panel has its own confirmation page before calling this
+void MainWindow::GoBackToLibrary()
+{
+	if (!m_game_launched)
+		return;
+	wxGetApp().RequestRestart(ActiveSettings::GetExecutablePath());
 }
 
 void MainWindow::OnFileExit(wxCommandEvent& event)
@@ -1309,16 +1446,55 @@ void MainWindow::LoadSettings()
 	if(config.check_update)
 		m_update_available = CemuUpdateWindow::IsUpdateAvailableAsync();
 
-	if (config.window_position != Vector2i{ -1,-1 })
-		this->SetPosition({ config.window_position.x, config.window_position.y });
-
-	if (config.window_size.x > 0 && config.window_size.y > 0)
+	// first run of this interface: the TV volume starts at 100% instead of Cemu's default 50% (only if it was never changed)
+	if (!config.tile_volume_done.GetValue())
 	{
-		this->SetSize({ config.window_size.x, config.window_size.y });
-
-		if (config.window_maximized)
-			this->Maximize();
+		{
+			auto lock = GetConfigHandle().Lock();
+			if ((int)GetConfig().tv_volume == 50)
+				GetConfig().tv_volume = 100;
+			GetWxGUIConfig().tile_volume_done = true;
+			g_wxConfig.Save();
+		}
+		GetConfigHandle().Save();
 	}
+
+	const bool hasStoredSize = config.window_size.x > 0 && config.window_size.y > 0;
+	if (hasStoredSize)
+		this->SetSize({ config.window_size.x, config.window_size.y });
+	else
+	{
+		// first run (nothing stored yet): size relative to the usable area of the screen, so it looks the same at 1080p, 2K and 4K
+		// (about 56% x 60% of it, never smaller than 1280x720 in DPI independent pixels, never bigger than 95% of the screen), centered
+		const int displayIndex = wxDisplay::GetFromPoint(wxGetMousePosition());
+		const wxRect area = wxDisplay(displayIndex != wxNOT_FOUND ? (unsigned int)displayIndex : 0u).GetClientArea();
+		const wxSize minSize = FromDIP(wxSize(1280, 720));
+		const int w = std::min((int)(area.width * 0.95), std::max(minSize.x, (int)(area.width * 0.56 + 0.5)));
+		const int h = std::min((int)(area.height * 0.95), std::max(minSize.y, (int)(area.height * 0.60 + 0.5)));
+		this->SetSize(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h);
+	}
+
+	// only restore the position if we have a stored size too (otherwise nothing has been saved yet)
+	// and if the window would actually be visible on one of the currently connected displays
+	if (hasStoredSize && config.window_position != Vector2i{ -1,-1 })
+	{
+		const wxRect storedRect(config.window_position.x, config.window_position.y, config.window_size.x, config.window_size.y);
+		bool isVisible = false;
+		for (unsigned int i = 0; i < wxDisplay::GetCount(); ++i)
+		{
+			const wxRect overlap = wxDisplay(i).GetClientArea().Intersect(storedRect);
+			if (overlap.GetWidth() >= 100 && overlap.GetHeight() >= 50)
+			{
+				isVisible = true;
+				break;
+			}
+		}
+		if (isVisible)
+			this->SetPosition({ config.window_position.x, config.window_position.y });
+	}
+
+	if (hasStoredSize && config.window_maximized)
+		this->Maximize();
 
 	if (config.pad_position != Vector2i{ -1,-1 })
 	{
@@ -1438,7 +1614,7 @@ void MainWindow::OnMouseRight(wxMouseEvent& event)
 
 void MainWindow::OnGameListBeginUpdate(wxCommandEvent& event)
 {
-	if (m_game_list->IsShown())
+	if (m_game_list->IsLibraryVisible())
 		m_info_bar->ShowMessage(_("Updating game list..."));
 }
 
@@ -1665,7 +1841,7 @@ void MainWindow::DestroyCanvas()
 
 void MainWindow::OnSizeEvent(wxSizeEvent& event)
 {
-	if (!IsMaximized() && !WindowSystem::IsFullScreen())
+	if (!IsMaximized() && !WindowSystem::IsFullScreen() && !m_borderless)
 		m_restored_size = GetSize();
 
 	const wxSize client_size = GetClientSize();
@@ -1698,7 +1874,7 @@ void MainWindow::OnDPIChangedEvent(wxDPIChangedEvent& event)
 
 void MainWindow::OnMove(wxMoveEvent& event)
 {
-	if (!IsMaximized() && !WindowSystem::IsFullScreen())
+	if (!IsMaximized() && !IsIconized() && !WindowSystem::IsFullScreen() && !m_borderless)
 		m_restored_position = GetPosition();
 
 	if (m_debugger_window && m_debugger_window->IsShown())
@@ -1760,6 +1936,13 @@ void MainWindow::SetFullScreen(bool state)
 	}
 	if (state && !m_game_launched)
 		return;
+	if (state && m_borderless)
+		SetBorderless(false);
+	if (!state && !IsFullScreen())
+	{
+		m_fullscreenMenuItem->Check(false);
+		return; // e.g. the Esc hotkey while in a window or in borderless mode
+	}
 	g_window_info.is_fullscreen = state;
 	m_fullscreenMenuItem->Check(state);
 
@@ -1768,7 +1951,10 @@ void MainWindow::SetFullScreen(bool state)
 	if (state)
 		m_menu_visible = false; // menu gets always disabled by wxFULLSCREEN_NOMENUBAR
 	else
+	{
 		SetMenuVisible(true);
+		UpdateMenuForLibrary();
+	}
 }
 
 void MainWindow::EndEmulation() // unfinished - memory leaks and crashes after repeated use (after 3x usually)
@@ -1808,6 +1994,238 @@ void MainWindow::SetMenuVisible(bool state)
 	SetMenuBar(state ? m_menuBar : nullptr);
 #endif
 	m_menu_visible = state;
+}
+
+// with the console style (tiles) the classic menu bar is never shown, neither in the library nor in-game: the options panel
+// reaches the same entries ("Menú de Cemu"). With the classic list it stays as always.
+void MainWindow::UpdateMenuForLibrary()
+{
+	if (IsFullScreen())
+		return; // fullscreen has its own menu handling
+	const bool tileStyle = m_game_list ? m_game_list->IsTileStyle() : GetWxGUIConfig().game_list_style == 3; // 3 = tiles
+	SetMenuVisible(!(m_borderless || tileStyle));
+}
+
+int MainWindow::GetDisplayMode() const
+{
+	if (IsFullScreen())
+		return 1;
+	return m_borderless ? 2 : 0;
+}
+
+// 0 = window, 1 = fullscreen, 2 = fullscreen without border. Also remembered for the next game launch.
+void MainWindow::SetDisplayMode(int mode)
+{
+	if (!m_game_launched)
+		return;
+	if (mode == 1)
+		SetFullScreen(true); // leaves the borderless mode by itself
+	else if (mode == 2)
+	{
+		if (IsFullScreen())
+			SetFullScreen(false);
+		SetBorderless(true);
+	}
+	else
+	{
+		if (IsFullScreen())
+			SetFullScreen(false);
+		if (m_borderless)
+			SetBorderless(false);
+	}
+}
+
+// borderless window over the usable area of the monitor (no title bar, no border, no menu bar, the taskbar stays visible)
+void MainWindow::SetBorderless(bool state)
+{
+#ifdef __WXMSW__
+	if (m_borderless == state)
+		return;
+	if (state && (!m_game_launched || IsFullScreen()))
+		return;
+	GetWxGUIConfig().borderless_fullscreen = state;
+	g_wxConfig.Save();
+
+	HWND hwnd = (HWND)GetHandle();
+	if (state)
+	{
+		m_borderlessSavedMaximized = IsMaximized();
+		if (m_borderlessSavedMaximized)
+			Restore();
+		m_borderlessSavedRect = GetRect();
+		m_borderlessSavedStyle = (intptr_t)::GetWindowLongPtrW(hwnd, GWL_STYLE);
+		const int displayIndex = wxDisplay::GetFromWindow(this);
+		const wxRect area = wxDisplay(displayIndex != wxNOT_FOUND ? (unsigned int)displayIndex : 0u).GetClientArea();
+
+		m_borderless = true;
+		SetMenuVisible(false);
+		::SetWindowLongPtrW(hwnd, GWL_STYLE, (LONG_PTR)(m_borderlessSavedStyle & ~(intptr_t)(WS_CAPTION | WS_THICKFRAME)));
+		::SetWindowPos(hwnd, nullptr, area.x, area.y, area.width, area.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+	}
+	else
+	{
+		m_borderless = false;
+		::SetWindowLongPtrW(hwnd, GWL_STYLE, (LONG_PTR)m_borderlessSavedStyle);
+		::SetWindowPos(hwnd, nullptr, m_borderlessSavedRect.x, m_borderlessSavedRect.y, m_borderlessSavedRect.width, m_borderlessSavedRect.height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+		SetMenuVisible(true);
+		UpdateMenuForLibrary();
+		if (m_borderlessSavedMaximized)
+			Maximize();
+	}
+#else
+	(void)state; // only implemented for Windows
+#endif
+}
+
+// opens the in-game menu with its keyboard hotkey. Done on key down and through the char hook of the main window, so it works
+// whichever child (canvas, panel) has the focus, instead of relying on the key up event of the render canvas.
+void MainWindow::OnCharHook(wxKeyEvent& event)
+{
+	if (m_game_launched && m_gameMenuOverlay && !m_gameMenuOverlay->IsOpen() && !event.IsAutoRepeat() && !swkbd_hasKeyboardInputHook())
+	{
+		const sHotkeyCfg& cfg = GetWxGUIConfig().hotkeys.openGameMenu;
+		uKeyboardHotkey pressed{};
+		pressed.key = event.GetKeyCode();
+		pressed.alt = event.AltDown();
+		pressed.ctrl = event.ControlDown();
+		pressed.shift = event.ShiftDown();
+		if (cfg.keyboard.raw > sHotkeyCfg::keyboardNone && pressed.raw == cfg.keyboard.raw)
+		{
+			OpenGameMenu();
+			return; // handled, not passed on
+		}
+	}
+	event.Skip();
+}
+
+void MainWindow::OpenGameMenu()
+{
+	if (m_game_launched && m_gameMenuOverlay)
+		m_gameMenuOverlay->Open();
+}
+
+namespace
+{
+	std::vector<wxGameTileMenuItem> ConvertMenu(const wxMenu* menu)
+	{
+		std::vector<wxGameTileMenuItem> result;
+		if (!menu)
+			return result;
+		for (size_t i = 0; i < menu->GetMenuItemCount(); ++i)
+		{
+			const wxMenuItem* item = menu->FindItemByPosition(i);
+			if (!item)
+				continue;
+			wxGameTileMenuItem entry;
+			if (item->IsSeparator())
+			{
+				entry.separator = true;
+				result.push_back(std::move(entry));
+				continue;
+			}
+			entry.id = item->GetId();
+			entry.label = item->GetItemLabelText();
+			entry.enabled = item->IsEnabled();
+			entry.checkable = item->IsCheckable();
+			entry.radio = item->GetKind() == wxITEM_RADIO;
+			entry.checked = item->IsCheckable() && item->IsChecked();
+			if (item->IsSubMenu())
+			{
+				entry.submenu = true;
+				entry.children = ConvertMenu(item->GetSubMenu());
+			}
+			result.push_back(std::move(entry));
+		}
+		return result;
+	}
+}
+
+// every top level menu of the classic menu bar, each one as a submenu entry
+std::vector<wxGameTileMenuItem> MainWindow::GetTileMenu()
+{
+	std::vector<wxGameTileMenuItem> result;
+	if (!m_menuBar)
+		return result;
+	for (size_t i = 0; i < m_menuBar->GetMenuCount(); ++i)
+	{
+		wxGameTileMenuItem entry;
+		entry.label = m_menuBar->GetMenuLabelText(i);
+		entry.enabled = m_menuBar->IsEnabledTop(i);
+		entry.submenu = true;
+		entry.children = ConvertMenu(m_menuBar->GetMenu(i));
+		result.push_back(std::move(entry));
+	}
+	return result;
+}
+
+// in-game menu: - and + on the controller pause the game and slide in the same panel pages as the library (Cemu menu, settings, back to the library)
+void MainWindow::CreateGameMenuOverlay()
+{
+	if (m_gameMenuOverlay)
+		return;
+	auto* overlay = new wxGameMenuOverlay(this);
+	overlay->onFetchMenu = [this]() { return GetTileMenu(); };
+	overlay->onMenuCommand = [this](int id) { ExecuteTileMenuCommand(id); };
+	overlay->isKeepOpenCommand = [this](int id) {
+		const wxMenuItem* item = m_menuBar ? m_menuBar->FindItem(id) : nullptr;
+		return item && item->IsCheckable();
+	};
+	overlay->onOpenSettings = [this]() { OpenSettings(); };
+	overlay->onBackToLibrary = [this]() { GoBackToLibrary(); };
+	overlay->onQuit = [this]() { Close(); };
+	overlay->isSoundEnabled = []() { return (bool)GetWxGUIConfig().tile_sound.GetValue(); };
+	overlay->getDisplayMode = [this]() { return GetDisplayMode(); };
+	overlay->setDisplayMode = [this](int mode) { SetDisplayMode(mode); };
+	overlay->getButtonStyle = []() { return GetWxGUIConfig().tile_button_style; };
+	overlay->setButtonStyle = [](int style) {
+		auto lock = GetConfigHandle().Lock();
+		GetWxGUIConfig().tile_button_style = style;
+		g_wxConfig.Save();
+	};
+	overlay->takeScreenshot = []() { HotkeySettings::TakeScreenshot(); };
+	overlay->getFastForward = []() { return ActiveSettings::GetTimerShiftFactor() >= 3; };
+	overlay->setFastForward = [](bool enabled) { ActiveSettings::SetTimerShiftFactor(enabled ? 3 : 1); };
+	overlay->getVolume = []() { return (int)GetConfig().tv_volume; };
+	overlay->setVolume = [this](int volume) {
+		GetConfig().tv_volume = volume;
+		if (g_tvAudio)
+			g_tvAudio->SetVolume(volume);
+		m_volumeDirty = true; // written to the config when the menu is closed
+	};
+	overlay->onHidden = [this]() {
+		if (m_volumeDirty)
+		{
+			m_volumeDirty = false;
+			GetConfigHandle().Save();
+		}
+		Raise();
+		if (m_render_canvas)
+			m_render_canvas->SetFocus();
+	};
+	overlay->Start();
+	m_gameMenuOverlay = overlay;
+}
+
+// runs a menu entry as if it had been clicked in the menu bar
+void MainWindow::ExecuteTileMenuCommand(int id)
+{
+	if (!m_menuBar)
+		return;
+	wxMenuItem* item = m_menuBar->FindItem(id);
+	if (!item || !item->IsEnabled())
+		return;
+	if (item->IsCheckable())
+	{
+		// the menu toggles the item before sending the event, the handlers read the new state from it
+		if (item->GetKind() == wxITEM_RADIO)
+			item->Check(true);
+		else
+			item->Check(!item->IsChecked());
+	}
+	wxCommandEvent menuEvent(wxEVT_MENU, id);
+	menuEvent.SetEventObject(this);
+	menuEvent.SetInt(item->IsCheckable() ? (item->IsChecked() ? 1 : 0) : 0);
+	GetEventHandler()->ProcessEvent(menuEvent);
 }
 
 void MainWindow::UpdateNFCMenu()
@@ -1869,7 +2287,8 @@ void MainWindow::OnTimer(wxTimerEvent& event)
 		m_update_available = {};
 	}
 
-	if (!IsFullScreen() || m_menu_visible)
+	// the pointer hides itself after 3 s without moving, in fullscreen and in the borderless mode
+	if ((!IsFullScreen() && !m_borderless) || m_menu_visible)
 		return;
 
 	const auto mouse_position = wxGetMousePosition();
@@ -2194,6 +2613,8 @@ void MainWindow::RecreateMenu()
 	}
 	else
 	{
+		m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_BACK_TO_LIBRARY, wxString::FromUTF8("Volver a la biblioteca"));
+		m_fileMenu->AppendSeparator();
 #ifdef CEMU_DEBUG_ASSERT
 		m_fileMenu->Append(MAINFRAME_MENU_ID_FILE_END_EMULATION, _("Close game"));
 		m_fileMenuSeparator1 = m_fileMenu->AppendSeparator();
@@ -2424,6 +2845,9 @@ void MainWindow::RecreateMenu()
 	// hide new menu in fullscreen
 	if (IsFullScreen())
 		SetMenuVisible(false);
+
+	// and while the tile view is shown
+	UpdateMenuForLibrary();
 }
 
 void MainWindow::UpdateChildWindowTitleRunningState()

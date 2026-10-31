@@ -287,7 +287,8 @@ bool CemuApp::OnInit()
 	}
 	else
 	{
-		LocalizeUI(static_cast<wxLanguage>(wxLocale::GetSystemLanguage()));
+		// first run (no settings.xml yet): Spanish, not the Windows language, so the setup assistant matches the rest of the interface
+		LocalizeUI(wxLANGUAGE_SPANISH);
 	}
 
 	SetTranslationCallback(TranslationCallback);

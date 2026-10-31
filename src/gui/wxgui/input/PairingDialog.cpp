@@ -99,7 +99,7 @@ void PairingDialog::OnGaugeUpdate(wxCommandEvent& event)
 
 	case PairingState::SearchFailed:
 	{
-		m_text->SetLabel(_("Failed to find controllers."));
+		m_text->SetLabel(wxString::FromUTF8("No se encontró ningún mando."));
 		m_gauge->SetValue(0);
 		m_cancelButton->SetLabel(_("Close"));
 		break;

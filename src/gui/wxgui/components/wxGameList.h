@@ -11,6 +11,7 @@
 
 #include "wxHelper.h"
 #include "util/helpers/Semaphore.h"
+#include "wxgui/components/wxGameTileView.h"
 
 class wxTitleIdEvent : public wxCommandEvent
 {
@@ -37,13 +38,26 @@ public:
 	{
 		kList,
 		kIcons,
-		kSmallIcons
+		kSmallIcons,
+		kTiles // console-style home screen, rendered by wxGameTileView (this list stays hidden and acts as the data source)
 	};
 
 	wxGameList(wxWindow* parent, wxWindowID id = wxID_ANY);
 	~wxGameList();
 
 	void SetStyle(Style style, bool save = true);
+
+	// tile view support
+	void SetTileView(wxGameTileView* tileView);
+	bool IsLibraryVisible() const;
+	bool IsTileStyle() const { return m_style == Style::kTiles; }
+	std::vector<wxGameTileEntry> GetTileEntries();
+	uint64_t GetTileRevision();
+	void LaunchTitle(uint64 titleId);
+	void ShowContextMenuForTitle(uint64 titleId);
+	std::vector<wxGameTileOption> GetTileOptions(uint64 titleId);
+	void ExecuteTileOption(uint64 titleId, int id);
+	wxGameTileDetails GetTileDetails(uint64 titleId);
 
 	void LoadConfig();
 	void SaveConfig(bool flush = false);
@@ -62,6 +76,9 @@ private:
 	std::atomic_bool m_exit = false;
 	Style m_style;
 	std::optional<TitleId> m_pendingSelection;
+	wxGameTileView* m_tileView = nullptr;
+	void UpdateViewVisibility();
+	bool IsLargeIconStyle() const { return m_style == Style::kIcons || m_style == Style::kTiles; }
 	long GetStyleFlags(Style style) const;
 
 	void UpdateItemColors(sint32 startIndex = 0);
@@ -125,6 +142,10 @@ private:
 	std::mutex m_icon_cache_mtx;
 	std::set<TitleId> m_icon_loaded;
 	std::map<TitleId, std::pair<int, int>> m_icon_cache; // pair contains icon and small icon
+	// 16:9 game art (meta/bootTvTex.tga) used as background of the tile view, protected by m_icon_cache_mtx
+	inline static constexpr int kArtWidth = 640;
+	inline static constexpr int kArtHeight = 360;
+	std::map<TitleId, std::shared_ptr<const wxImage>> m_art_cache;
 
 	std::map<TitleId, std::string> m_name_cache;
 

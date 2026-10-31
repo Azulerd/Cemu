@@ -122,11 +122,18 @@ void PPCTimer_waitForInit()
 }
 
 FSpinlock sTimerSpinlock;
+static bool s_timerFrozen = false; // protected by sTimerSpinlock, true while the emulation is paused from the UI
 
 // thread safe
 uint64 PPCTimer_getFromRDTSC()
 {
 	sTimerSpinlock.lock();
+	if (s_timerFrozen)
+	{
+		const uint64 frozenValue = _tickSummary;
+		sTimerSpinlock.unlock();
+		return frozenValue; // paused: the game clock does not advance
+	}
 	_mm_mfence();
 	uint64 rdtscCurrentMeasure = __rdtsc();
 	uint64 rdtscDif = rdtscCurrentMeasure - _rdtscLastMeasure;
@@ -164,4 +171,24 @@ uint64 PPCTimer_getFromRDTSC()
 
 	sTimerSpinlock.unlock();
 	return _tickSummary;
+}
+
+// freezes / unfreezes the game clock (used when the emulation is paused from the UI, so the game does not see the pause as a huge time jump)
+void PPCTimer_setFrozen(bool frozen)
+{
+	if (frozen)
+	{
+		PPCTimer_getFromRDTSC(); // account for everything up to this point
+		sTimerSpinlock.lock();
+		s_timerFrozen = true;
+		sTimerSpinlock.unlock();
+	}
+	else
+	{
+		sTimerSpinlock.lock();
+		_mm_mfence();
+		_rdtscLastMeasure = __rdtsc(); // forget the time spent paused
+		s_timerFrozen = false;
+		sTimerSpinlock.unlock();
+	}
 }

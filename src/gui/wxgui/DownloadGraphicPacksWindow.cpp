@@ -1,6 +1,7 @@
 #include "wxgui/wxgui.h"
 #include "wxgui/DownloadGraphicPacksWindow.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <curl/curl.h>
 #include <zip.h>
@@ -135,7 +136,7 @@ void DownloadGraphicPacksWindow::UpdateThread()
 	// github API request
 	if (curlDownloadFile(githubAPIUrl.c_str(), &tempDownloadState) == false)
 	{
-		wxMessageBox( _("Error"), _(L"Failed to connect to server"), wxOK | wxCENTRE | wxICON_ERROR, this);
+		wxMessageBox(wxString::FromUTF8("No se pudo conectar con el servidor."), _("Error"), wxOK | wxCENTRE | wxICON_ERROR, this);
 		m_threadState = ThreadError;
 		return;
 	}
@@ -201,7 +202,7 @@ void DownloadGraphicPacksWindow::UpdateThread()
 	m_stage = StageDownloading;
 	if (curlDownloadFile(browserDownloadUrl, m_downloadState.get()) == false)
 	{
-		wxMessageBox(_("Error"), _(L"Failed to connect to server"), wxOK | wxCENTRE | wxICON_ERROR, this);
+		wxMessageBox(wxString::FromUTF8("No se pudo conectar con el servidor."), _("Error"), wxOK | wxCENTRE | wxICON_ERROR, this);
 		m_threadState = ThreadError;
 		return;
 	}
@@ -292,34 +293,80 @@ void DownloadGraphicPacksWindow::UpdateThread()
 	m_threadState = ThreadFinished;
 }
 
-DownloadGraphicPacksWindow::DownloadGraphicPacksWindow(wxWindow* parent)
-	: wxDialog(parent, wxID_ANY, _("Checking version..."), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxMINIMIZE_BOX | wxSYSTEM_MENU | wxTAB_TRAVERSAL | wxCLOSE_BOX),
-	m_threadState(ThreadRunning), m_stage(StageCheckVersion), m_currentStage(StageCheckVersion)
+DownloadGraphicPacksWindow::DownloadGraphicPacksWindow(wxWindow* parent, bool askFirst)
+	: wxDialog(parent, wxID_ANY, wxString::FromUTF8("Packs gráficos"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxMINIMIZE_BOX | wxSYSTEM_MENU | wxTAB_TRAVERSAL | wxCLOSE_BOX),
+	m_threadState(ThreadRunning), m_stage(StageCheckVersion), m_currentStage(StageCheckVersion), m_askFirst(askFirst)
 {
 	auto* sizer = new wxBoxSizer(wxVERTICAL);
 
-	m_processBar = new wxGauge(this, wxID_ANY, 100, wxDefaultPosition, wxSize(500, 20), wxGA_HORIZONTAL);
+	// status / explanation text: its height is fixed so the window does not jump when the text changes
+	m_statusText = new wxStaticText(this, wxID_ANY, wxEmptyString);
+	m_statusText->SetFont(GetFont().Scaled(1.15));
+	sizer->Add(m_statusText, 0, wxALL | wxEXPAND, FromDIP(14));
+
+	m_processBar = new wxGauge(this, wxID_ANY, 100, wxDefaultPosition, FromDIP(wxSize(480, 22)), wxGA_HORIZONTAL);
 	m_processBar->SetValue(0);
 	m_processBar->SetRange(100);
-	sizer->Add(m_processBar, 0, wxALL | wxEXPAND, 5);
+	sizer->Add(m_processBar, 0, wxLEFT | wxRIGHT | wxEXPAND, FromDIP(14));
 
-	auto* m_cancelButton = new wxButton(this, wxID_ANY, _("Cancel"));
+	// one row of buttons: "Más tarde" + "Descargar ahora" before the download starts, "Cancelar" while it runs
+	auto* buttons = new wxBoxSizer(wxHORIZONTAL);
+	buttons->AddStretchSpacer(1);
+	m_laterButton = new wxButton(this, wxID_ANY, wxString::FromUTF8("Más tarde"));
+	m_laterButton->Bind(wxEVT_BUTTON, &DownloadGraphicPacksWindow::OnCancelButton, this);
+	buttons->Add(m_laterButton, 0, wxALL, FromDIP(6));
+	m_startButton = new wxButton(this, wxID_ANY, wxString::FromUTF8("Descargar ahora"));
+	m_startButton->Bind(wxEVT_BUTTON, &DownloadGraphicPacksWindow::OnStartButton, this);
+	buttons->Add(m_startButton, 0, wxALL, FromDIP(6));
+	m_cancelButton = new wxButton(this, wxID_ANY, _("Cancel"));
 	m_cancelButton->Bind(wxEVT_BUTTON, &DownloadGraphicPacksWindow::OnCancelButton, this);
-	sizer->Add(m_cancelButton, 0, wxALIGN_RIGHT | wxALL, 5);
+	buttons->Add(m_cancelButton, 0, wxALL, FromDIP(6));
+	sizer->Add(buttons, 0, wxALL | wxEXPAND, FromDIP(8));
+
+	const bool asking = m_askFirst;
+	m_laterButton->Show(asking);
+	m_startButton->Show(asking);
+	m_cancelButton->Show(!asking);
+	int statusHeight = FromDIP(48);
+	if (asking)
+	{
+		m_statusText->SetLabel(wxString::FromUTF8("Los packs gráficos mejoran los juegos: más resolución, más FPS y mejores efectos visuales.\n\nCemu puede descargar ahora la última versión de los packs de la comunidad (necesita internet). Si prefieres hacerlo después: Opciones > Paquetes gráficos > Descargar los últimos paquetes gráficos comunitarios."));
+		m_statusText->Wrap(FromDIP(480));
+		statusHeight = std::max(statusHeight, m_statusText->GetBestSize().y);
+		m_startButton->SetDefault();
+		m_startButton->SetFocus();
+	}
+	m_statusText->SetMinSize(wxSize(FromDIP(480), statusHeight));
 
 	this->SetSizer(sizer);
-	this->Centre(wxBOTH);
-
 	wxWindowBase::Layout();
 	wxWindowBase::Fit();
+	this->Centre(wxBOTH); // after Fit()
 
 	m_timer = new wxTimer(this);
 	this->Bind(wxEVT_TIMER, &DownloadGraphicPacksWindow::OnUpdate, this);
 	this->Bind(wxEVT_CLOSE_WINDOW, &DownloadGraphicPacksWindow::OnClose, this);
-	m_timer->Start(250);
-
 
 	m_downloadState = std::make_unique<curlDownloadFileState_t>();
+}
+
+// starts the worker thread and the progress timer (right away from ShowModal, or after "Descargar ahora")
+void DownloadGraphicPacksWindow::StartDownload()
+{
+	m_laterButton->Show(false);
+	m_startButton->Show(false);
+	m_cancelButton->Show(true);
+	m_cancelButton->SetFocus();
+	m_statusText->SetLabel(wxString::FromUTF8("Buscando la última versión de los packs gráficos..."));
+	Layout();
+	m_thread = std::thread(&DownloadGraphicPacksWindow::UpdateThread, this);
+	m_timer->Start(250);
+}
+
+void DownloadGraphicPacksWindow::OnStartButton(const wxCommandEvent& event)
+{
+	if (!m_thread.joinable())
+		StartDownload();
 }
 
 DownloadGraphicPacksWindow::~DownloadGraphicPacksWindow()
@@ -341,7 +388,8 @@ int DownloadGraphicPacksWindow::ShowModal()
 		wxMessageBox(_("Graphic packs cannot be updated while a game is running."), _("Graphic packs"), 5, this);
 		return wxID_CANCEL;
 	}
-	m_thread = std::thread(&DownloadGraphicPacksWindow::UpdateThread, this);
+	if (!m_askFirst)
+		StartDownload();
 	wxDialog::ShowModal();
 	return m_threadState == ThreadCanceled ? wxID_CANCEL : wxID_OK;
 }
@@ -374,27 +422,22 @@ void DownloadGraphicPacksWindow::OnUpdate(const wxTimerEvent& event)
 	if (m_currentStage != m_stage)
 	{
 		if (m_stage == StageDownloading)
-		{
-			this->SetTitle(_("Downloading graphic packs..."));
-		}
+			m_statusText->SetLabel(wxString::FromUTF8("Descargando packs gráficos..."));
 		else if (m_stage == StageExtracting)
-		{
-			this->SetTitle(_("Extracting..."));
-		}
+			m_statusText->SetLabel(wxString::FromUTF8("Extrayendo..."));
 		m_currentStage = m_stage;
 	}
 
-	if (m_currentStage == StageDownloading)
+	if (m_currentStage == StageDownloading || m_currentStage == StageExtracting)
 	{
-		const sint32 processedSize = (sint32)(m_downloadState->progress * 100.0f);
+		const double progress = m_currentStage == StageDownloading ? m_downloadState->progress : m_extractionProgress.load();
+		const sint32 processedSize = (sint32)(progress * 100.0f);
 		if (m_processBar->GetValue() != processedSize)
+		{
 			m_processBar->SetValue(processedSize);
-	}
-	else if (m_currentStage == StageExtracting)
-	{
-		const sint32 processedSize = (sint32)(m_extractionProgress * 100.0f);
-		if (m_processBar->GetValue() != processedSize)
-			m_processBar->SetValue(processedSize);
+			const wxString base = wxString::FromUTF8(m_currentStage == StageDownloading ? "Descargando packs gráficos..." : "Extrayendo...");
+			m_statusText->SetLabel(wxString::Format("%s  %d %%", base, (int)processedSize));
+		}
 	}
 }
 

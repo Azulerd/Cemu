@@ -40,7 +40,7 @@ wxPanel* GettingStartedDialog::CreatePage1()
 
 	if(ActiveSettings::IsPortableMode())
 	{
-		m_page1.portableModeInfoText = new wxStaticText(mainPanel, wxID_ANY, _("Cemu is running in portable mode"));
+		m_page1.portableModeInfoText = new wxStaticText(mainPanel, wxID_ANY, wxString::FromUTF8("Cemu se está ejecutando en modo portable"));
 		m_page1.portableModeInfoText->Show(true);
 		page1_sizer->Add(m_page1.portableModeInfoText, 0, wxALL, 5);
 
@@ -94,7 +94,7 @@ wxPanel* GettingStartedDialog::CreatePage1()
 
 	{
 		m_page1.gamePathBoxSizer = new wxStaticBoxSizer(wxVERTICAL, mainPanel, _("Game paths"));
-		m_page1.gamePathText = new wxStaticText(m_page1.gamePathBoxSizer->GetStaticBox(), wxID_ANY, _("The game path is scanned by Cemu to automatically locate your games, game updates and DLCs. We recommend creating a dedicated directory in which\nyou place all your Wii U game files. Additional paths can be set later in Cemu's general settings. All common Wii U game formats are supported by Cemu."));
+		m_page1.gamePathText = new wxStaticText(m_page1.gamePathBoxSizer->GetStaticBox(), wxID_ANY, wxString::FromUTF8("Cemu explora la carpeta de juegos para encontrar automáticamente tus juegos, actualizaciones y DLC. Te recomendamos crear una carpeta exclusiva donde\nguardes todos tus archivos de juegos de Wii U. Se pueden agregar más carpetas después en los ajustes generales de Cemu. Cemu admite todos los formatos comunes de Wii U."));
 		m_page1.gamePathBoxSizer->Add(m_page1.gamePathText, 0, wxALL, 5);
 
 		auto* game_path_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -111,11 +111,11 @@ wxPanel* GettingStartedDialog::CreatePage1()
 	}
 
 	{
-		auto* sizer = new wxStaticBoxSizer(wxVERTICAL, mainPanel, _("Graphic packs && mods"));
+		auto* sizer = new wxStaticBoxSizer(wxVERTICAL, mainPanel, wxString::FromUTF8("Packs gráficos && mods"));
 
-		sizer->Add(new wxStaticText(sizer->GetStaticBox(), wxID_ANY, _("Graphic packs improve games by offering the ability to change resolution, increase FPS, tweak visuals or add gameplay modifications.\nGet started by opening the graphic packs configuration window.\n")), 0, wxALL, 5);
+		sizer->Add(new wxStaticText(sizer->GetStaticBox(), wxID_ANY, wxString::FromUTF8("Los packs gráficos mejoran los juegos: permiten cambiar la resolución, aumentar los FPS, ajustar los efectos visuales o agregar modificaciones de jugabilidad.\nPara empezar, abre la ventana de configuración de packs gráficos.\n")), 0, wxALL, 5);
 
-		auto* download_gp = new wxButton(sizer->GetStaticBox(), wxID_ANY, _("Download and configure graphic packs"));
+		auto* download_gp = new wxButton(sizer->GetStaticBox(), wxID_ANY, wxString::FromUTF8("Descargar y configurar packs gráficos"));
 		download_gp->Bind(wxEVT_BUTTON, &GettingStartedDialog::OnConfigureGPs, this);
 		sizer->Add(download_gp, 0, wxALIGN_CENTER | wxALL, 5);
 
@@ -265,12 +265,14 @@ GettingStartedDialog::GettingStartedDialog(wxWindow* parent)
 
 	ApplySettings();
 	UpdateWindowSize();
+	this->Centre(wxBOTH); // after Fit(): centering before it left the dialog off-center
 }
 
 void GettingStartedDialog::OnConfigureGPs(wxCommandEvent& event)
 {
-	DownloadGraphicPacksWindow dialog(this);
-	dialog.ShowModal();
+	DownloadGraphicPacksWindow dialog(this, true);
+	if (dialog.ShowModal() == wxID_CANCEL)
+		return; // "Más tarde" (or the download was canceled): nothing to configure yet
 	GraphicPacksWindow2::RefreshGraphicPacks();
 	GraphicPacksWindow2 window(this, 0);
 	window.ShowModal();

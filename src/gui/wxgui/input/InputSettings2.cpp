@@ -108,6 +108,7 @@ InputSettings2::InputSettings2(wxWindow* parent)
 	SetSizer(sizer);
 	Layout();
 	Fit();
+	Centre(wxBOTH);
 
     panel->Hide();
 
@@ -258,7 +259,7 @@ wxWindow* InputSettings2::initialize_page(size_t index)
 		}
 
 #ifdef HAS_BLUEZ
-		auto* pairingDialog = new wxButton(page, wxID_ANY, _("Pair Wii/Wii U Controller"));
+		auto* pairingDialog = new wxButton(page, wxID_ANY, wxString::FromUTF8("Emparejar mando de Wii / Wii U"));
 		pairingDialog->Bind(wxEVT_BUTTON, [this](wxEvent&) {
 			PairingDialog pairing_dialog(this);
 			pairing_dialog.ShowModal();

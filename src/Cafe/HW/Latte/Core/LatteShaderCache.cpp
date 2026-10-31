@@ -63,6 +63,25 @@ struct
 	sint32 pipelineFileCount;
 }g_shaderCacheLoaderState;
 
+// used by the GUI loading splash: set once Cemu draws its own loading screen (it shows the same game art)
+static std::atomic<bool> s_loadScreenShown{false};
+
+bool LatteShaderCache_GameScreenIsReady()
+{
+	return s_loadScreenShown.load() || LatteGPUState.frameCounter > 0;
+}
+
+void LatteShaderCache_ResetGameScreenReady()
+{
+	s_loadScreenShown.store(false);
+}
+
+// true once the game itself draws frames (not only Cemu's shader loading screen), used by the GUI tip about the in-game menu
+bool LatteShaderCache_GameIsRendering()
+{
+	return LatteGPUState.frameCounter > 0;
+}
+
 FileCache* s_shaderCacheGeneric = nullptr;	// contains hardware and version independent shader information
 
 #define SHADER_CACHE_GENERIC_EXTRA_VERSION		2 // changing this constant will invalidate all hardware-independent cache files
@@ -560,6 +579,7 @@ void LatteShaderCache_ShowProgress(const std::function <bool(void)>& loadUpdateF
 		ImGui_GetFont(window_size.y / 48.0f); // = 16
 
 		g_renderer->BeginFrame(true);
+		s_loadScreenShown.store(true);
 		if (g_renderer->ImguiBegin(true))
 		{
 			auto& io = ImGui::GetIO();

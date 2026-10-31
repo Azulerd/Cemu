@@ -133,7 +133,7 @@ struct HotkeyEntry
 };
 
 HotkeySettings::HotkeySettings(wxWindow* parent)
-	: wxFrame(parent, wxID_ANY, _("Hotkey Settings"))
+	: wxFrame(parent, wxID_ANY, wxString::FromUTF8("Atajos de teclado"))
 {
 	SetIcon(wxICON(X_HOTKEY_SETTINGS));
 
@@ -156,6 +156,7 @@ HotkeySettings::HotkeySettings(wxWindow* parent)
 
 	/* hotkeys */
 	CreateHotkeyRow(_tr("Toggle fullscreen"), s_cfgHotkeys.toggleFullscreen);
+	CreateHotkeyRow(wxString::FromUTF8("Menú dentro del juego"), s_cfgHotkeys.openGameMenu);
 	CreateHotkeyRow(_tr("Take screenshot"), s_cfgHotkeys.takeScreenshot);
 	CreateHotkeyRow(_tr("Toggle fast-forward"), s_cfgHotkeys.toggleFastForward);
 #ifdef CEMU_DEBUG_ASSERT
@@ -178,6 +179,12 @@ HotkeySettings::~HotkeySettings()
 	}
 }
 
+void HotkeySettings::TakeScreenshot()
+{
+	if (g_renderer)
+		g_renderer->RequestScreenshot(SaveScreenshot);
+}
+
 void HotkeySettings::Init(MainWindow* mainWindowFrame)
 {
 	s_cfgHotkeyToFuncMap.insert({
@@ -186,6 +193,9 @@ void HotkeySettings::Init(MainWindow* mainWindowFrame)
 		 }},
 		{&s_cfgHotkeys.toggleFullscreenAlt, [](void) {
 			 s_mainWindow->SetFullScreen(!s_mainWindow->IsFullScreen());
+		 }},
+		{&s_cfgHotkeys.openGameMenu, [](void) {
+			 s_mainWindow->OpenGameMenu();
 		 }},
 		{&s_cfgHotkeys.exitFullscreen, [](void) {
 			 s_mainWindow->SetFullScreen(false);
