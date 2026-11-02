@@ -759,6 +759,42 @@ namespace padscore
 
 		osLib_returnFromFunction(hCPU, 0);
 	}
+	// Cemu Pro: forget everything the previous title left behind. Closing a game and launching another one inside the same Cemu process
+	// used to keep kpad_initialized, the connect callbacks, "disconnectCalled" and the "already reported" state of the controllers, so
+	// the next game never received the "controller connected" callback and said that the controller was not detected.
+	void ResetState()
+	{
+		g_padscore.kpad_initialized = false;
+		g_padscore.max_controllers = kWPADMaxControllers;
+		for (auto& data : g_padscore.controller_data)
+		{
+			data.extension_callback = nullptr;
+			data.connectCallback = nullptr;
+			data.sampling_callback = nullptr;
+			data.dpd_callback = nullptr;
+			data.dpd_enabled = true;
+			data.disconnectCalled = false;
+			data.btn_repeat = {};
+		}
+		g_kpad_ringbuffer = nullptr;
+		g_kpad_ringbuffer_length = 0;
+		g_wpad_callback_by_kpad = false;
+		g_wpad_state = kWPADStateMaster;
+		for (auto& last : g_kpadLastRead)
+			last = 0;
+		g_kpadIsInited = true;
+		// the emulated controllers live as long as Cemu: a new title must see them as freshly connected again
+		for (size_t i = 0; i < InputManager::kMaxWPADControllers; ++i)
+		{
+			if (const auto controller = InputManager::instance().get_wpad_controller(i))
+			{
+				controller->m_status = WPADController::ConnectCallbackStatus::ReportConnect;
+				controller->m_extension_status = WPADController::ConnectCallbackStatus::ReportConnect;
+				controller->set_data_format(controller->get_default_data_format());
+			}
+		}
+	}
+
 	void start()
 	{
 		OSCreateAlarm(&g_padscore.alarm);
@@ -779,6 +815,7 @@ namespace padscore
 		void RPLUnmapped() override
 		{
 			coreinit::OSCancelAlarm(g_padscore.alarm.GetPtr());
+			ResetState();
 			s_padscoreStaticData.Deallocate();
 		}
 
@@ -791,6 +828,7 @@ namespace padscore
 		void RPLMapped() override
 		{
 			s_padscoreStaticData.Allocate();
+			ResetState();
 			cafeExportRegister("padscore", WPADIsMplsAttached, LogType::InputAPI);
 			cafeExportRegister("padscore", WPADGetAccGravityUnit, LogType::InputAPI);
 

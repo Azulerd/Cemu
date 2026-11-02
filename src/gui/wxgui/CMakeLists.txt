@@ -12,6 +12,16 @@ add_library(CemuWxGui STATIC
   components/wxDownloadManagerList.h
   components/wxGameList.cpp
   components/wxGameList.h
+  components/wxGamepadNavigator.cpp
+  components/wxGamepadNavigator.h
+  components/wxGamepadState.cpp
+  components/wxGamepadState.h
+  components/wxGameLoadSplash.cpp
+  components/wxGameLoadSplash.h
+  components/wxGameMenuOverlay.cpp
+  components/wxGameMenuOverlay.h
+  components/wxGameTileView.cpp
+  components/wxGameTileView.h
   components/wxInputDraw.cpp
   components/wxInputDraw.h
   components/wxLogCtrl.cpp

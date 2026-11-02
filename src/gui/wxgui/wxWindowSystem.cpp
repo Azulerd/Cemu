@@ -74,7 +74,7 @@ WindowSystem::WindowInfo& WindowSystem::GetWindowInfo()
 void WindowSystem::UpdateWindowTitles(bool isIdle, bool isLoading, double fps)
 {
 	std::string windowText;
-	windowText = BUILD_VERSION_WITH_NAME_STRING;
+	windowText = "Cemu Pro"; // window title without version/hash
 
 	if (isIdle)
 	{

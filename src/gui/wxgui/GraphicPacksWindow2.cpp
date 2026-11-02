@@ -1,3 +1,4 @@
+#include <wx/display.h>
 #include "helpers/wxHelpers.h"
 #include "wxgui/wxgui.h"
 #include "wxgui/GraphicPacksWindow2.h"
@@ -195,7 +196,7 @@ void GraphicPacksWindow2::RefreshGraphicPacks()
 }
 
 GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_filter)
-	: wxDialog(parent, wxID_ANY, _("Graphic packs"), wxDefaultPosition, wxSize(1000,670), wxCLOSE_BOX | wxCLIP_CHILDREN | wxCAPTION | wxRESIZE_BORDER),
+	: wxDialog(parent, wxID_ANY, wxString::FromUTF8("Paquetes gráficos"), wxDefaultPosition, wxSize(1000,670), wxCLOSE_BOX | wxCLIP_CHILDREN | wxCAPTION | wxRESIZE_BORDER),
 		m_installed_games(CafeTitleList::GetAllTitleIds())
 {
 	if (title_id_filter != 0)
@@ -204,7 +205,7 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 	m_filter_installed_games = !m_installed_games.empty();
 
 	SetIcon(wxICON(X_BOX));
-	SetMinSize(wxSize(500, 400));
+	SetMinSize(FromDIP(wxSize(700, 440)));
 	auto main_sizer = new wxBoxSizer(wxVERTICAL);
 
 	m_splitter_window = new wxSplitterWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxSP_3D);
@@ -316,7 +317,7 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 		m_update_graphicPacks->Bind(wxEVT_BUTTON, &GraphicPacksWindow2::OnCheckForUpdates, this);
 		row->Add(m_update_graphicPacks, 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
 
-		m_download_from_url = new wxHyperlinkCtrl(m_right_panel, wxID_ANY, _("Or download pack from URL..."), _(""));
+		m_download_from_url = new wxHyperlinkCtrl(m_right_panel, wxID_ANY, wxString::FromUTF8("O descargar un paquete desde una URL..."), _(""));
 		m_download_from_url->Bind(wxEVT_HYPERLINK, &GraphicPacksWindow2::OnClickCustomDownload, this);
 		row->Add(m_download_from_url, 0, wxALL | wxALIGN_CENTER_VERTICAL, 5);
 
@@ -336,6 +337,20 @@ GraphicPacksWindow2::GraphicPacksWindow2(wxWindow* parent, uint64_t title_id_fil
 	main_sizer->Add(m_info_bar, 0, wxALL | wxEXPAND, 5);
 
 	SetSizer(main_sizer);
+
+	// size relative to the screen (the fixed 1000x670 pixels was tiny on 2K / 4K and cut the names), wider list on the left
+	{
+		const int displayIndex = wxDisplay::GetFromWindow(parent ? parent : this);
+		const wxRect area = wxDisplay(displayIndex != wxNOT_FOUND ? (unsigned int)displayIndex : 0u).GetClientArea();
+		const wxSize minSize = FromDIP(wxSize(820, 520));
+		const int w = std::min((int)(area.width * 0.95), std::max(minSize.x, (int)(area.width * 0.42 + 0.5)));
+		const int h = std::min((int)(area.height * 0.95), std::max(minSize.y, (int)(area.height * 0.62 + 0.5)));
+		SetSize(w, h);
+		Layout();
+		m_ratio = 0.38f;
+		m_splitter_window->SetSashPosition((sint32)(m_ratio * GetClientSize().GetWidth()));
+	}
+	Centre(wxBOTH);
 
 	UpdateTitleRunning(CafeSystem::IsTitleRunning());
 	FillGraphicPackList();

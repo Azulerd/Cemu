@@ -1,0 +1,68 @@
+name: Build Cemu (Windows, manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  VCPKG_ROOT: "${{github.workspace}}/dependencies/vcpkg"
+  VCPKG_BINARY_SOURCES: 'clear;nuget,GitHub,readwrite'
+  VCPKG_FORCE_DOWNLOADED_BINARIES: true
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+    steps:
+    - name: "Checkout repo"
+      uses: actions/checkout@v6
+      with:
+        submodules: "recursive"
+
+    - name: "Setup cmake"
+      uses: jwlawson/actions-setup-cmake@v2
+      with:
+        cmake-version: '3.29.0'
+
+    - name: "Bootstrap vcpkg"
+      run: |
+        ./dependencies/vcpkg/bootstrap-vcpkg.bat
+
+    - name: 'Setup NuGet Credentials for vcpkg'
+      shell: 'bash'
+      run: |
+        `./dependencies/vcpkg/vcpkg.exe fetch nuget | tail -n 1` \
+        sources add \
+        -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" \
+        -storepasswordincleartext \
+        -name "GitHub" \
+        -username "${{ github.repository_owner }}" \
+        -password "${{ secrets.GITHUB_TOKEN }}"
+        `./dependencies/vcpkg/vcpkg.exe fetch nuget | tail -n 1` \
+        setapikey "${{ secrets.GITHUB_TOKEN }}" \
+        -source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+
+    - name: "cmake"
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=release -DVCPKG_INSTALL_OPTIONS="--clean-after-build"
+
+    - name: "Build Cemu"
+      run: |
+        cd build
+        cmake --build . --config release
+
+    - name: Prepare artifact
+      run: |
+        Rename-Item bin/Cemu_release.exe Cemu.exe
+        New-Item -ItemType Directory -Force -Path bin/portable | Out-Null
+        Set-Content -Path bin/portable/LEEME.txt -Value 'Carpeta portable: Cemu guarda aqui su configuracion y datos.'
+
+    - name: Upload Cemu (full bin folder)
+      uses: actions/upload-artifact@v6
+      with:
+        name: cemu-mejoras-windows-x64
+        path: ./bin

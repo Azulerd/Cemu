@@ -15,6 +15,7 @@
 #include "wxgui/helpers/wxHelpers.h"
 #include "Cemu/ncrypto/ncrypto.h"
 #include "wxgui/input/HotkeySettings.h"
+#include "wxgui/components/wxGamepadNavigator.h"
 #include "wxgui/debugger/DebuggerWindow2.h"
 #include <wx/language.h>
 
@@ -289,7 +290,8 @@ bool CemuApp::OnInit()
 	}
 	else
 	{
-		LocalizeUI(static_cast<wxLanguage>(wxLocale::GetSystemLanguage()));
+		// first run (no settings.xml yet): Spanish, not the Windows language, so the setup assistant matches the rest of the interface
+		LocalizeUI(wxLANGUAGE_SPANISH);
 	}
 
 	SetTranslationCallback(TranslationCallback);
@@ -376,6 +378,7 @@ bool CemuApp::OnInit()
 	g_window_info.app_active = true;
 
 	HotkeySettings::Init(m_mainFrame);
+	wxGamepadNavigator::Start(); // controller navigation for the settings windows
 
 	SetTopWindow(m_mainFrame);
 	m_mainFrame->Show();

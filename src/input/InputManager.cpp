@@ -782,6 +782,26 @@ void InputManager::apply_game_profile()
 	}
 }
 
+// the game profile of the title that was just closed must not stay loaded: put back the controllers saved in the settings
+void InputManager::reset_game_profile()
+{
+	for (size_t i = 0; i < kMaxController; ++i)
+	{
+		if (!m_is_gameprofile_set[i])
+			continue;
+		m_is_gameprofile_set[i] = false;
+		try
+		{
+			delete_controller(i, false);
+			load(i);
+		}
+		catch (const std::exception& ex)
+		{
+			cemuLog_log(LogType::Force, "can't restore controller profile: {}", ex.what());
+		}
+	}
+}
+
 std::vector<std::string> InputManager::get_profiles()
 {
 	const auto path = ActiveSettings::GetConfigPath("controllerProfiles");

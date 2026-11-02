@@ -621,6 +621,8 @@ namespace coreinit
 	void OSSchedulerBegin(sint32 numCPUEmulationThreads);
 	void OSSchedulerEnd();
 	bool OSIsSchedulerActive();
+	void OSSchedulerSetPaused(bool paused);
+	bool OSSchedulerIsPaused();
 
 	// internal
 	void __OSAddReadyThreadToRunQueue(OSThread_t* thread);

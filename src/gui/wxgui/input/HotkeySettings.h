@@ -11,6 +11,7 @@ class HotkeySettings : public wxFrame
 public:
 	static void Init(class MainWindow* mainWindow);
 
+	static void TakeScreenshot(); // same as the screenshot hotkey
 	static void CaptureInput(wxKeyEvent& event);
 	static void CaptureInput(const ControllerState& currentState, const ControllerState& lastState);
 

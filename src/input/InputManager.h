@@ -72,6 +72,7 @@ public:
 	}
 
 	void apply_game_profile();
+	void reset_game_profile(); // after a title was closed: controllers set by its game profile go back to the saved ones
 	void on_device_changed();
 
 

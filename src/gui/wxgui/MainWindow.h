@@ -1,6 +1,10 @@
 #pragma once
 
 #include <wx/wx.h>
+#include <wx/weakref.h>
+#include <wx/stopwatch.h>
+#include <atomic>
+#include <memory>
 #include <wx/dataview.h>
 #include <wx/infobar.h>
 
@@ -71,8 +75,11 @@ public:
 	[[nodiscard]] bool IsGameLaunched() const { return m_game_launched; }
 
 	void SetFullScreen(bool state);
+	void OnCharHook(wxKeyEvent& event);
+	void OpenGameMenu(); // in-game menu (same as the - + chord of the controller), used by the keyboard hotkey
 	void EndEmulation();
 	void SetMenuVisible(bool state);
+	void UpdateMenuForLibrary(); // the classic menu bar is hidden while the tile view is shown
 	void UpdateNFCMenu();
 	bool IsMenuHidden() const;
 	void TogglePadView();
@@ -100,6 +107,10 @@ public:
 	void OnLaunchFromFile(wxLaunchGameEvent& event);
 	void OnInstallUpdate(wxCommandEvent& event);
 	void OnFileExit(wxCommandEvent& event);
+	void OnBackToLibrary(wxCommandEvent& event);
+	void OnRestartToLibrary(wxCommandEvent& event);
+	void GoBackToLibrary();      // alternative way back: restarts Cemu
+	void CloseGameToLibrary();   // closes the running game and shows the library again, all inside this window
 	void OnNFCMenu(wxCommandEvent& event);
 	void OnOptionsInput(wxCommandEvent& event);
 	void OnAccountSelect(wxCommandEvent& event);
@@ -149,6 +160,15 @@ public:
 private:
 	bool FullscreenEnabled() const;
 	void RecreateMenu();
+	std::vector<wxGameTileMenuItem> GetTileMenu();
+	void ExecuteTileMenuCommand(int id);
+	void CreateGameMenuOverlay(); // in-game menu opened with - and + on the controller
+	void FinishReturnToLibrary(); // second half of closing a game (the title is already shut down)
+	void OnCloseWatchdogTimer(wxTimerEvent& event);
+	void OnReturnCoverTimer(wxTimerEvent& event); // takes the closing cover away once the library has its games
+	int GetDisplayMode() const;   // 0 = window, 1 = fullscreen, 2 = fullscreen without border
+	void SetDisplayMode(int mode);
+	void SetBorderless(bool state);
 	void UpdateChildWindowTitleRunningState();
 	static wxString GetInitialWindowTitle();
 
@@ -180,6 +200,27 @@ private:
 
 	bool m_menu_visible = false;
 	bool m_game_launched = false;
+	wxWeakRef<wxFrame> m_loadSplash; // loading splash shown after starting a game from the library
+	bool m_volumeDirty = false; // volume changed from the in-game menu, saved when it closes
+
+	// closing a game from the in-game menu (see CloseGameToLibrary)
+	bool m_closingGame = false;          // the title is being shut down: the window cannot be closed and the menu does not open
+	bool m_restoringWindowMode = false;  // leaving fullscreen / borderless because the game ended: the stored setting is not changed
+	wxTimer m_returnCoverTimer;
+	wxTimer m_closeWatchdogTimer;        // one shot: the title has not closed in time, offers to restart Cemu
+	static constexpr int kCloseWatchdogMs = 20000;
+	std::atomic<bool> m_titleShutdownRunning{false}; // the worker thread is inside ShutdownTitle
+	int m_returnCoverTries = 0;
+	int m_gameCycle = 0;                 // games started in this run (only used in the log)
+	wxString m_lastSplashName;           // what the loading cover showed, reused by the closing cover
+	wxBitmap m_lastSplashIcon;
+	std::shared_ptr<const wxImage> m_lastSplashArt;
+
+	// "fullscreen without border": borderless window over the usable area of the monitor (the taskbar stays visible)
+	bool m_borderless = false;
+	wxRect m_borderlessSavedRect;
+	bool m_borderlessSavedMaximized = false;
+	intptr_t m_borderlessSavedStyle = 0;
 
 	#ifdef ENABLE_DISCORD_RPC
 	std::unique_ptr<DiscordPresence> m_discord;
@@ -205,6 +246,9 @@ private:
 
 	// rendering
 	wxWindow* m_render_canvas{};
+
+	// in-game menu (see wxGameMenuOverlay), created when a game is launched
+	class wxGameMenuOverlay* m_gameMenuOverlay{};
 
 	// gamelist
 	wxGameList* m_game_list{};
